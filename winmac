@@ -4,7 +4,7 @@
 #   winmac setup [bottle]     instala o Wine (se faltar) e a Steam oficial num bottle novo
 #   winmac list               lista bottles e jogos da Steam
 #   winmac steam [bottle]     abre a Steam
-#   winmac play <appid|nome>  abre um jogo pela Steam
+#   winmac play <appid|nome>  abre um jogo (a Steam fica escondida em segundo plano)
 #   winmac run <exe> [bottle] roda qualquer .exe
 #   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
 #   winmac kill [bottle]      fecha tudo que está rodando no bottle
@@ -25,6 +25,18 @@ bottle_path() {
   else echo "$CX_BOTTLES/$name"; fi
 }
 
+# DLLs que o CrossOver coloca no bottle e que derrubam o Wine comum (ex.: steamwebhelper.exe trava).
+# Ficam guardadas em ~/winmac/crossover-dlls/<bottle> para poder devolver.
+CX_DLLS=(system32/atidxx64.dll system32/nvapi64.dll system32/nvngx.dll system32/nvngx-on-metalfx.dll
+         system32/winemetal.dll system32/wpcap.dll syswow64/winemetal.dll syswow64/wpcap.dll)
+set_aside_crossover_dlls() {
+  local win="$1/drive_c/windows" dest="$HOME_DIR/crossover-dlls/$(basename "$1")" f
+  for f in "${CX_DLLS[@]}"; do
+    [ -f "$win/$f" ] || continue
+    mkdir -p "$dest/$(dirname "$f")" && mv "$win/$f" "$dest/$f"
+  done
+}
+
 setup_env() {
   export WINEPREFIX="$(bottle_path "$1")"
   export WINEESYNC=1
@@ -34,12 +46,15 @@ setup_env() {
   [ -d "$WINEPREFIX/drive_c/users/crossover" ] && export USER=crossover
   [ -x "$WINE" ] || { echo "Wine Staging não encontrado em /Applications/Wine Staging.app"; exit 1; }
   [ -d "$WINEPREFIX" ] || { echo "Bottle não encontrado: $WINEPREFIX"; exit 1; }
+  set_aside_crossover_dlls "$WINEPREFIX"
   if pgrep -f "CrossOver.app/.*wineserver" >/dev/null; then
     echo "O CrossOver está rodando. Feche a Steam/CrossOver antes de usar o winmac no mesmo bottle."; exit 1
   fi
+  configure_bottle
 }
 
 WINE_URL="https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-staging-11.18-osx64.tar.xz"
+DXVK_URL="https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507-repack/dxvk-macOS-async-v1.10.3-20230507-repack.tar.gz"
 STEAM_SETUP_URL="https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe"
 
 install_wine() {
@@ -50,6 +65,31 @@ install_wine() {
     && mv "$tmp/Wine Staging.app" /Applications/ && xattr -dr com.apple.quarantine "/Applications/Wine Staging.app"
   rm -rf "$tmp"
   [ -x "$WINE" ] || { echo "Falha ao instalar o Wine."; exit 1; }
+}
+
+# DXVK (DirectX 10/11 -> Vulkan/Metal): sem ele os jogos DX11 falham com "Failed to initialize graphics"
+install_dxvk() {
+  local cache="$HOME_DIR/dxvk" src d
+  src=$(ls -d "$cache"/dxvk-macOS-* 2>/dev/null | head -1)
+  if [ -z "$src" ]; then
+    echo "Baixando o DXVK..."
+    mkdir -p "$cache" && curl -fsL "$DXVK_URL" | tar -xz -C "$cache" || { echo "Falha ao baixar o DXVK."; return 1; }
+    src=$(ls -d "$cache"/dxvk-macOS-* | head -1)
+  fi
+  for d in d3d11 d3d10core; do
+    cp "$src/x64/$d.dll" "$WINEPREFIX/drive_c/windows/system32/"
+    cp "$src/x32/$d.dll" "$WINEPREFIX/drive_c/windows/syswow64/"
+    "$WINE" reg add 'HKCU\Software\Wine\DllOverrides' /v $d /t REG_SZ /d native,builtin /f >/dev/null 2>&1
+  done
+}
+
+# Ajustes feitos uma vez por bottle
+configure_bottle() {
+  [ -f "$WINEPREFIX/.winmac-ok" ] && return 0
+  [ -d "$WINEPREFIX/drive_c/windows/system32" ] || return 0   # bottle ainda vazio (winmac setup)
+  install_dxvk || return 1
+  "$WINE" reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f >/dev/null 2>&1
+  touch "$WINEPREFIX/.winmac-ok"
 }
 
 steam_installed() { [ -f "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steam.exe" ]; }
@@ -72,6 +112,7 @@ case "$1" in
     "$WINE" 'C:\SteamSetup.exe' /S >/dev/null 2>&1
     "$WINESERVER" -w
     rm -f "$WINEPREFIX/drive_c/SteamSetup.exe"
+    configure_bottle
     steam_installed "$name" && echo "Steam instalada! Clique em Abrir Steam." || { echo "A instalação da Steam falhou."; exit 1; } ;;
   list)
     for b in "$HOME_DIR/Bottles"/* "$CX_BOTTLES"/*; do
@@ -95,7 +136,7 @@ case "$1" in
       id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
-    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
+    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" -silent -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
   run)
     setup_env "$3"
     nohup "$WINE" "$2" >/dev/null 2>&1 & ;;

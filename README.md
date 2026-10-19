@@ -39,7 +39,9 @@ Os bottles ficam em `~/winmac/Bottles/<nome>`. Se a pasta não existir, o WinMac
 
 ## Limitações
 
-- Não tem D3DMetal: jogos DirectX 11/12 podem rodar mais lentos que no CrossOver, ou nem abrir.
+- DirectX 10/11 roda pelo [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS), que o WinMac instala sozinho em cada bottle. DirectX 12 não é suportado (não tem D3DMetal).
+- A janela da Steam pode ficar preta no Wine do macOS. Os jogos funcionam assim mesmo: abra pela grade do WinMac, que inicia a Steam escondida em segundo plano.
+- Bottles vindos do CrossOver: o WinMac guarda as DLLs de GPU específicas do CrossOver em `~/winmac/crossover-dlls/`, porque elas derrubam o Wine comum.
 - Jogos com anti-cheat em modo kernel (EA Javelin, Vanguard, etc.) não funcionam.
 - Não use o mesmo bottle no CrossOver e no WinMac ao mesmo tempo.
 
