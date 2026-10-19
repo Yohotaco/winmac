@@ -103,10 +103,41 @@ fix_webhelper() {
   local dir="$WINEPREFIX/drive_c/Program Files (x86)/Steam/bin/cef/cef.win64"
   [ -f "$dir/steamwebhelper.exe" ] && [ -f "$WRAP_EXE" ] || return 0
   if ! cmp -s "$WRAP_EXE" "$dir/steamwebhelper.exe"; then
-    mv -f "$dir/steamwebhelper.exe" "$dir/steamwebhelper_real.exe"
+    # O original da Steam tem vários MB; o embrulho tem ~150 KB. Só guarda como _real se for o original
+    # (senão, ao atualizar o embrulho, a versão antiga dele apagaria o original).
+    if [ "$(stat -f%z "$dir/steamwebhelper.exe")" -gt 1000000 ]; then
+      mv -f "$dir/steamwebhelper.exe" "$dir/steamwebhelper_real.exe"
+    fi
     cp "$WRAP_EXE" "$dir/steamwebhelper.exe"
   fi
+  [ -f "$dir/steamwebhelper_real.exe" ] || return 0
   echo "$WEBHELPER_FLAGS" > "$dir/winmac_flags.txt"
+}
+
+# Jogos "overlay" (fundo transparente por cima da área de trabalho) usam DwmExtendFrameIntoClientArea,
+# que o Wine do macOS não implementa: o fundo fica preto. O winmac-transparent.dylib é carregado nos
+# processos do Wine e deixa a janela desses jogos transparente. A lista é montada procurando, nos jogos
+# Unity instalados, o uso de DwmExtendFrameIntoClientArea.
+TRANSPARENT_DYLIB="$HOME_DIR/tools/winmac-transparent.dylib"
+transparent_exes() {
+  local common="$(steam_apps "$1")/common" dll dir exes=""
+  for dll in "$common"/*/*_Data/Managed/Assembly-CSharp.dll; do
+    [ -f "$dll" ] && grep -q -a "DwmExtendFrameIntoClientArea" "$dll" || continue
+    dir=$(dirname "$(dirname "$dll")")              # .../Jogo_Data
+    exes="$exes:$(basename "${dir%_Data}").exe"
+  done
+  echo "${exes#:}"
+}
+
+# Abre a Steam (com argumentos extras) já com o módulo de transparência
+launch_steam() {
+  export WINMAC_TRANSPARENT_EXES="$(transparent_exes "$BOTTLE")"
+  if [ -n "$WINMAC_TRANSPARENT_EXES" ] && [ -f "$TRANSPARENT_DYLIB" ]; then
+    export DYLD_INSERT_LIBRARIES="$TRANSPARENT_DYLIB"
+  fi
+  # Sem nohup: ele é um programa protegido do macOS e apagaria o DYLD_INSERT_LIBRARIES
+  "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" "$@" >/dev/null 2>&1 &
+  disown
 }
 
 steam_apps() { echo "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamapps"; }
@@ -143,7 +174,7 @@ case "$1" in
   steam)
     setup_env "$2"
     fix_webhelper
-    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" >/dev/null 2>&1 & echo "Steam abrindo..." ;;
+    BOTTLE="$2"; launch_steam; echo "Steam abrindo..." ;;
   play)
     setup_env "$3"
     id="$2"
@@ -153,7 +184,7 @@ case "$1" in
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
     fix_webhelper
-    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
+    BOTTLE="$3"; launch_steam -applaunch "$id"; echo "Abrindo jogo $id..." ;;
   run)
     setup_env "$3"
     nohup "$WINE" "$2" >/dev/null 2>&1 & ;;

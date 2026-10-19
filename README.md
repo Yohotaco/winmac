@@ -62,7 +62,15 @@ No Wine do macOS, o navegador interno da Steam (`steamwebhelper.exe`) desenha pe
 
 A Steam é aberta com `-noverifyfiles` para não desfazer o embrulho. Se uma atualização da Steam trocar o arquivo, o `winmac` reaplica o embrulho na próxima vez que abrir a Steam.
 
-Para recompilar o embrulho: `x86_64-w64-mingw32-gcc -O2 -municode -o tools/steamwebhelper-wrap.exe tools/webhelper_wrap.c`
+Para recompilar o embrulho: `x86_64-w64-mingw32-gcc -O2 -municode -mwindows -o tools/steamwebhelper-wrap.exe tools/webhelper_wrap.c`
+
+## Jogos "overlay" com fundo transparente
+
+Alguns jogos (como *How to Train Your Cock* / *Como Treinar o Seu Pinto*) ficam por cima da área de trabalho com o fundo transparente. No Windows eles usam `DwmExtendFrameIntoClientArea`, que o Wine do macOS não implementa, e o fundo fica preto.
+
+O WinMac resolve com [`tools/transparent.m`](tools/transparent.m): um módulo do macOS carregado nos processos do Wine (`DYLD_INSERT_LIBRARIES`) que deixa a janela Cocoa e a camada Metal desses jogos não opacas. O `winmac` detecta os jogos Unity que usam `DwmExtendFrameIntoClientArea` e só ativa o módulo neles. Se a Steam já estava aberta antes de instalar um jogo desses, feche e abra a Steam pelo WinMac de novo.
+
+Para recompilar o módulo: `clang -arch x86_64 -dynamiclib -fobjc-arc -framework Foundation -framework QuartzCore -o tools/winmac-transparent.dylib tools/transparent.m && codesign -s - -f tools/winmac-transparent.dylib`
 
 ## Licença
 

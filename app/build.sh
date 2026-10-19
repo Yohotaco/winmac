@@ -44,6 +44,6 @@ PLIST
 codesign --force --deep -s - "$APP"
 [ "$1" = "--no-install" ] && { echo "Compilado em $(pwd)/$APP"; exit 0; }
 mkdir -p "$HOME/winmac/Bottles" && cp ../winmac "$HOME/winmac/winmac" && chmod +x "$HOME/winmac/winmac"
-mkdir -p "$HOME/winmac/tools" && cp ../tools/steamwebhelper-wrap.exe "$HOME/winmac/tools/"
+mkdir -p "$HOME/winmac/tools" && cp ../tools/steamwebhelper-wrap.exe ../tools/winmac-transparent.dylib "$HOME/winmac/tools/"
 rm -rf /Applications/WinMac.app && cp -R "$APP" /Applications/
 echo "Instalado em /Applications/WinMac.app"

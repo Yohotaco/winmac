@@ -16,7 +16,8 @@ int wmain(void) {
     if (*args == L'"') { args = wcschr(args + 1, L'"'); args = args ? args + 1 : L""; }
     else { while (*args && *args != L' ') args++; }
     swprintf(cmd, 32768, L"\"%ls\"%ls %ls", real, args, extra);
-    STARTUPINFOW si = { sizeof si }; PROCESS_INFORMATION pi;
+    // Repassa as entradas/saídas padrão que a Steam deu ao embrulho (ela conversa com o navegador por elas)
+    STARTUPINFOW si; GetStartupInfoW(&si); PROCESS_INFORMATION pi;
     if (!CreateProcessW(real, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) return 1;
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 0; GetExitCodeProcess(pi.hProcess, &code);
