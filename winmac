@@ -16,6 +16,8 @@ HOME_DIR="$HOME/winmac"
 CX_BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
 DEFAULT_BOTTLE="Steam"
 STEAM_EXE='C:\Program Files (x86)\Steam\steam.exe'
+# Sem isto a janela da Steam fica preta no Wine do macOS (o navegador interno tenta usar a GPU)
+STEAM_ARGS=(-cef-in-process-gpu -cef-disable-gpu -cef-disable-gpu-compositing -cef-disable-d3d11)
 
 bottle_path() {
   local name="${1:-$DEFAULT_BOTTLE}"
@@ -28,6 +30,8 @@ setup_env() {
   export WINEESYNC=1
   export WINEDEBUG=-all
   export MTL_HUD_ENABLED="${MTL_HUD_ENABLED:-0}"
+  # Bottles do CrossOver usam o usuário Windows "crossover"; mantém o mesmo para os saves continuarem no lugar
+  [ -d "$WINEPREFIX/drive_c/users/crossover" ] && export USER=crossover
   [ -x "$WINE" ] || { echo "Wine Staging não encontrado em /Applications/Wine Staging.app"; exit 1; }
   [ -d "$WINEPREFIX" ] || { echo "Bottle não encontrado: $WINEPREFIX"; exit 1; }
   if pgrep -f "CrossOver.app/.*wineserver" >/dev/null; then
@@ -82,7 +86,7 @@ case "$1" in
     done ;;
   steam)
     setup_env "$2"
-    nohup "$WINE" "$STEAM_EXE" >/dev/null 2>&1 & echo "Steam abrindo..." ;;
+    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" >/dev/null 2>&1 & echo "Steam abrindo..." ;;
   play)
     setup_env "$3"
     id="$2"
@@ -91,7 +95,7 @@ case "$1" in
       id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
-    nohup "$WINE" "$STEAM_EXE" -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
+    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
   run)
     setup_env "$3"
     nohup "$WINE" "$2" >/dev/null 2>&1 & ;;
