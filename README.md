@@ -6,20 +6,28 @@ O WinMac é um app SwiftUI com uma lista de bottles, um botão para abrir a Stea
 
 > O WinMac não tem nenhum código do CrossOver e não tem relação com a CodeWeavers. Ele só abre o Wine open source em prefixos (bottles) comuns. Ele **lê** bottles já existentes do CrossOver, porque eles são prefixos Wine normais.
 
-## Requisitos
+## Instalação (fácil, sem compilar)
 
-- macOS 14 ou mais novo (Apple Silicon precisa do Rosetta 2)
-- Ferramentas de linha de comando do Xcode, para compilar o app (`xcode-select --install`)
-- Internet: na primeira vez, o WinMac baixa o [Wine Staging](https://github.com/Gcenx/macOS_Wine_builds/releases) e o instalador oficial da Steam direto da Valve
+Abra o Terminal e cole:
 
-## Instalação
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yohotaco/winmac/main/install.sh | bash
+```
+
+O WinMac abre sozinho no final. Clique em **Instalar Steam**: o app baixa o [Wine Staging](https://github.com/Gcenx/macOS_Wine_builds/releases), o DXVK e o instalador oficial da Steam direto da Valve. Depois é só clicar em **Abrir Steam** e entrar na sua conta.
+
+Requisitos: macOS 14 ou mais novo, internet e uns 2 GB livres (fora os jogos). Nos Macs com chip Apple, o instalador também instala o Rosetta 2.
+
+## Instalação (compilando)
+
+Precisa das ferramentas de linha de comando do Xcode (`xcode-select --install`).
 
 ```bash
 git clone https://github.com/Yohotaco/winmac.git ~/winmac-src
 ~/winmac-src/app/build.sh   # instala /Applications/WinMac.app e ~/winmac/winmac
 ```
 
-Abra o **WinMac** e clique em **Instalar Steam**. O app baixa o Wine (se ainda não estiver instalado), cria o bottle e instala a Steam oficial. Depois é só clicar em **Abrir Steam** e entrar na sua conta.
+Se aparecer `this SDK is not supported by the compiler`, as ferramentas da Apple estão desencontradas. O `build.sh` tenta outro SDK sozinho; se não houver nenhum compatível, use a instalação fácil acima ou reinstale as ferramentas: `sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install`.
 
 Para usar o comando no terminal: `ln -sf ~/winmac/winmac /opt/homebrew/bin/winmac`
 
