@@ -22,5 +22,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 codesign --force --deep -s - "$APP"
+mkdir -p "$HOME/winmac/Bottles" && cp ../winmac "$HOME/winmac/winmac" && chmod +x "$HOME/winmac/winmac"
 rm -rf /Applications/WinMac.app && cp -R "$APP" /Applications/
 echo "Instalado em /Applications/WinMac.app"

@@ -73,13 +73,48 @@ final class Model: ObservableObject {
     @Published var selected: Bottle?
     @Published var games: [Game] = []
     @Published var status = ""
+    @Published var installing = false
 
     init() { selected = bottles.first; reload() }
+
+    var steamInstalled: Bool {
+        guard let b = selected else { return false }
+        return FileManager.default.fileExists(atPath: "\(b.path)/\(steamSubdir)/steam.exe")
+    }
 
     func reload() {
         bottles = loadBottles()
         if selected == nil { selected = bottles.first }
         games = selected.map(loadGames) ?? []
+    }
+
+    func installSteam() {
+        installing = true
+        status = "Preparando…"
+        let name = selected?.id ?? "Steam"
+        DispatchQueue.global().async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/bash")
+            p.arguments = [winmacScript, "setup", name]
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = pipe
+            pipe.fileHandleForReading.readabilityHandler = { h in
+                let text = String(data: h.availableData, encoding: .utf8) ?? ""
+                let line = text.components(separatedBy: CharacterSet(charactersIn: "\n\r"))
+                    .map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+                if let line { DispatchQueue.main.async { self.status = line } }
+            }
+            try? p.run()
+            p.waitUntilExit()
+            pipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                self.installing = false
+                self.selected = nil
+                self.reload()
+                if self.selected == nil { self.selected = self.bottles.first { $0.id == name } }
+            }
+        }
     }
 
     func run(_ args: [String]) {
@@ -123,6 +158,31 @@ struct GameCard: View {
     }
 }
 
+struct InstallView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "gamecontroller.fill").font(.system(size: 64)).foregroundStyle(.tint)
+            Text("Bem-vindo ao WinMac").font(.largeTitle.bold())
+            Text("Vamos instalar a Steam oficial da Valve num bottle novo.\nO download leva alguns minutos.")
+                .multilineTextAlignment(.center).foregroundStyle(.secondary)
+            if model.installing {
+                ProgressView().controlSize(.large)
+            } else {
+                Button { model.installSteam() } label: {
+                    Label("Instalar Steam", systemImage: "arrow.down.circle.fill").padding(.horizontal, 12)
+                }
+                .controlSize(.large).buttonStyle(.borderedProminent)
+            }
+            Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("WinMac")
+    }
+}
+
 struct ContentView: View {
     @StateObject var model = Model()
 
@@ -134,6 +194,9 @@ struct ContentView: View {
             .navigationTitle("Bottles")
             .onChange(of: model.selected) { _, _ in model.reload() }
         } detail: {
+            if !model.steamInstalled {
+                InstallView(model: model)
+            } else {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
                     Button { model.run(["steam", model.selected?.id ?? "Steam"]) } label: {
@@ -164,6 +227,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle(model.selected?.id ?? "WinMac")
+            }
         }
         .frame(minWidth: 820, minHeight: 560)
     }

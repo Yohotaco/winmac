@@ -10,22 +10,24 @@ O WinMac é um app SwiftUI com uma lista de bottles, um botão para abrir a Stea
 
 - macOS 14 ou mais novo (Apple Silicon precisa do Rosetta 2)
 - Ferramentas de linha de comando do Xcode, para compilar o app (`xcode-select --install`)
-- [Wine Staging para macOS](https://github.com/Gcenx/macOS_Wine_builds/releases) instalado em `/Applications/Wine Staging.app`
+- Internet: na primeira vez, o WinMac baixa o [Wine Staging](https://github.com/Gcenx/macOS_Wine_builds/releases) e o instalador oficial da Steam direto da Valve
 
 ## Instalação
 
 ```bash
 git clone https://github.com/Yohotaco/winmac.git ~/winmac-src
-mkdir -p ~/winmac/Bottles
-cp ~/winmac-src/winmac ~/winmac/winmac && chmod +x ~/winmac/winmac
-ln -sf ~/winmac/winmac /opt/homebrew/bin/winmac
-~/winmac-src/app/build.sh   # instala /Applications/WinMac.app
+~/winmac-src/app/build.sh   # instala /Applications/WinMac.app e ~/winmac/winmac
 ```
+
+Abra o **WinMac** e clique em **Instalar Steam**. O app baixa o Wine (se ainda não estiver instalado), cria o bottle e instala a Steam oficial. Depois é só clicar em **Abrir Steam** e entrar na sua conta.
+
+Para usar o comando no terminal: `ln -sf ~/winmac/winmac /opt/homebrew/bin/winmac`
 
 ## Uso
 
 | Comando | O que faz |
 |---|---|
+| `winmac setup [bottle]` | Instala o Wine e a Steam oficial num bottle novo |
 | `winmac list` | Lista os bottles e os jogos da Steam |
 | `winmac steam [bottle]` | Abre a Steam |
 | `winmac play <appid\|nome>` | Abre um jogo pela Steam |

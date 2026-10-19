@@ -1,6 +1,7 @@
 #!/bin/bash
 # winmac — roda seus jogos Windows no Mac com o Wine Staging (grátis, open source).
 # Uso:
+#   winmac setup [bottle]     instala o Wine (se faltar) e a Steam oficial num bottle novo
 #   winmac list               lista bottles e jogos da Steam
 #   winmac steam [bottle]     abre a Steam
 #   winmac play <appid|nome>  abre um jogo pela Steam
@@ -34,9 +35,40 @@ setup_env() {
   fi
 }
 
+WINE_URL="https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-staging-11.18-osx64.tar.xz"
+STEAM_SETUP_URL="https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe"
+
+install_wine() {
+  [ -x "$WINE" ] && return 0
+  echo "Baixando o Wine Staging..."
+  local tmp; tmp=$(mktemp -d)
+  curl -fL# -o "$tmp/wine.tar.xz" "$WINE_URL" && tar -xJf "$tmp/wine.tar.xz" -C "$tmp" \
+    && mv "$tmp/Wine Staging.app" /Applications/ && xattr -dr com.apple.quarantine "/Applications/Wine Staging.app"
+  rm -rf "$tmp"
+  [ -x "$WINE" ] || { echo "Falha ao instalar o Wine."; exit 1; }
+}
+
+steam_installed() { [ -f "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steam.exe" ]; }
+
 steam_apps() { echo "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamapps"; }
 
 case "$1" in
+  setup)
+    name="${2:-$DEFAULT_BOTTLE}"
+    install_wine
+    if steam_installed "$name"; then echo "A Steam já está instalada no bottle '$name'."; exit 0; fi
+    mkdir -p "$HOME_DIR/Bottles/$name"
+    setup_env "$name"
+    echo "Criando o bottle '$name'..."
+    "$WINE" wineboot --init >/dev/null 2>&1
+    "$WINESERVER" -w
+    echo "Baixando a Steam oficial da Valve..."
+    curl -fL# -o "$WINEPREFIX/drive_c/SteamSetup.exe" "$STEAM_SETUP_URL" || { echo "Falha ao baixar a Steam."; exit 1; }
+    echo "Instalando a Steam..."
+    "$WINE" 'C:\SteamSetup.exe' /S >/dev/null 2>&1
+    "$WINESERVER" -w
+    rm -f "$WINEPREFIX/drive_c/SteamSetup.exe"
+    steam_installed "$name" && echo "Steam instalada! Clique em Abrir Steam." || { echo "A instalação da Steam falhou."; exit 1; } ;;
   list)
     for b in "$HOME_DIR/Bottles"/* "$CX_BOTTLES"/*; do
       [ -d "$b" ] && [ ! -L "$b" ] || continue
