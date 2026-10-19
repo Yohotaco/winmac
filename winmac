@@ -1,0 +1,78 @@
+#!/bin/bash
+# winmac — roda seus jogos Windows no Mac com o Wine Staging (grátis, open source).
+# Uso:
+#   winmac list               lista bottles e jogos da Steam
+#   winmac steam [bottle]     abre a Steam
+#   winmac play <appid|nome>  abre um jogo pela Steam
+#   winmac run <exe> [bottle] roda qualquer .exe
+#   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
+#   winmac kill [bottle]      fecha tudo que está rodando no bottle
+#   winmac restore [bottle]   restaura o registro original do CrossOver (backup)
+
+WINE="/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine"
+WINESERVER="/Applications/Wine Staging.app/Contents/Resources/wine/bin/wineserver"
+HOME_DIR="$HOME/winmac"
+CX_BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
+DEFAULT_BOTTLE="Steam"
+STEAM_EXE='C:\Program Files (x86)\Steam\steam.exe'
+
+bottle_path() {
+  local name="${1:-$DEFAULT_BOTTLE}"
+  if [ -d "$HOME_DIR/Bottles/$name" ]; then echo "$HOME_DIR/Bottles/$name"
+  else echo "$CX_BOTTLES/$name"; fi
+}
+
+setup_env() {
+  export WINEPREFIX="$(bottle_path "$1")"
+  export WINEESYNC=1
+  export WINEDEBUG=-all
+  export MTL_HUD_ENABLED="${MTL_HUD_ENABLED:-0}"
+  [ -x "$WINE" ] || { echo "Wine Staging não encontrado em /Applications/Wine Staging.app"; exit 1; }
+  [ -d "$WINEPREFIX" ] || { echo "Bottle não encontrado: $WINEPREFIX"; exit 1; }
+  if pgrep -f "CrossOver.app/.*wineserver" >/dev/null; then
+    echo "O CrossOver está rodando. Feche a Steam/CrossOver antes de usar o winmac no mesmo bottle."; exit 1
+  fi
+}
+
+steam_apps() { echo "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamapps"; }
+
+case "$1" in
+  list)
+    for b in "$HOME_DIR/Bottles"/* "$CX_BOTTLES"/*; do
+      [ -d "$b" ] && [ ! -L "$b" ] || continue
+      echo "== Bottle: $(basename "$b")"
+      for f in "$b/drive_c/Program Files (x86)/Steam/steamapps/"appmanifest_*.acf; do
+        [ -f "$f" ] || continue
+        id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
+        nm=$(sed -n 's/.*"name"[[:space:]]*"\(.*\)".*/\1/p' "$f")
+        printf "   %-10s %s\n" "$id" "$nm"
+      done
+    done ;;
+  steam)
+    setup_env "$2"
+    nohup "$WINE" "$STEAM_EXE" >/dev/null 2>&1 & echo "Steam abrindo..." ;;
+  play)
+    setup_env "$3"
+    id="$2"
+    if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+      f=$(grep -il "\"name\".*$id" "$(steam_apps "$3")"/appmanifest_*.acf | head -1)
+      id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
+    fi
+    [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
+    nohup "$WINE" "$STEAM_EXE" -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
+  run)
+    setup_env "$3"
+    nohup "$WINE" "$2" >/dev/null 2>&1 & ;;
+  kill)
+    export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; echo "Bottle fechado." ;;
+  migrate)
+    name="${2:-$DEFAULT_BOTTLE}"; src="$CX_BOTTLES/$name"
+    [ -d "$src" ] && [ ! -L "$src" ] || { echo "Nada para migrar em $src"; exit 1; }
+    pgrep -f "CrossOver.app/.*wineserver" >/dev/null && { echo "Feche o CrossOver primeiro."; exit 1; }
+    mkdir -p "$HOME_DIR/Bottles" && mv "$src" "$HOME_DIR/Bottles/$name" && ln -s "$HOME_DIR/Bottles/$name" "$src"
+    echo "Bottle '$name' agora mora em ~/winmac/Bottles (o CrossOver ainda acha ele pelo atalho)." ;;
+  restore)
+    p="$(bottle_path "$2")"; cp "$HOME_DIR/backup/"{system,user,userdef}.reg "$p/" && echo "Registro restaurado." ;;
+  *)
+    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac
