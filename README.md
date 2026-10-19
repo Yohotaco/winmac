@@ -40,10 +40,21 @@ Os bottles ficam em `~/winmac/Bottles/<nome>`. Se a pasta não existir, o WinMac
 ## Limitações
 
 - DirectX 10/11 roda pelo [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS), que o WinMac instala sozinho em cada bottle. DirectX 12 não é suportado (não tem D3DMetal).
-- A janela da Steam pode ficar preta no Wine do macOS. Os jogos funcionam assim mesmo: abra pela grade do WinMac, que inicia a Steam escondida em segundo plano.
 - Bottles vindos do CrossOver: o WinMac guarda as DLLs de GPU específicas do CrossOver em `~/winmac/crossover-dlls/`, porque elas derrubam o Wine comum.
 - Jogos com anti-cheat em modo kernel (EA Javelin, Vanguard, etc.) não funcionam.
 - Não use o mesmo bottle no CrossOver e no WinMac ao mesmo tempo.
+
+## Como a tela preta da Steam foi resolvida
+
+No Wine do macOS, o navegador interno da Steam (`steamwebhelper.exe`) desenha pela GPU, e a janela fica preta. O WinMac troca esse arquivo por um embrulho pequeno ([`tools/webhelper_wrap.c`](tools/webhelper_wrap.c)) que abre o original (`steamwebhelper_real.exe`) com opções do Chromium para desenhar por software:
+
+```
+--disable-gpu --disable-gpu-compositing --in-process-gpu --disable-features=CalculateNativeWinOcclusion --disable-direct-composition
+```
+
+A Steam é aberta com `-noverifyfiles` para não desfazer o embrulho. Se uma atualização da Steam trocar o arquivo, o `winmac` reaplica o embrulho na próxima vez que abrir a Steam.
+
+Para recompilar o embrulho: `x86_64-w64-mingw32-gcc -O2 -municode -o tools/steamwebhelper-wrap.exe tools/webhelper_wrap.c`
 
 ## Licença
 

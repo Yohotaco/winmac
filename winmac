@@ -4,7 +4,7 @@
 #   winmac setup [bottle]     instala o Wine (se faltar) e a Steam oficial num bottle novo
 #   winmac list               lista bottles e jogos da Steam
 #   winmac steam [bottle]     abre a Steam
-#   winmac play <appid|nome>  abre um jogo (a Steam fica escondida em segundo plano)
+#   winmac play <appid|nome>  abre um jogo pela Steam
 #   winmac run <exe> [bottle] roda qualquer .exe
 #   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
 #   winmac kill [bottle]      fecha tudo que está rodando no bottle
@@ -16,8 +16,10 @@ HOME_DIR="$HOME/winmac"
 CX_BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
 DEFAULT_BOTTLE="Steam"
 STEAM_EXE='C:\Program Files (x86)\Steam\steam.exe'
-# Sem isto a janela da Steam fica preta no Wine do macOS (o navegador interno tenta usar a GPU)
-STEAM_ARGS=(-cef-in-process-gpu -cef-disable-gpu -cef-disable-gpu-compositing -cef-disable-d3d11)
+# -noverifyfiles: impede a Steam de desfazer o embrulho do steamwebhelper (ver fix_webhelper)
+STEAM_ARGS=(-noverifyfiles)
+WRAP_EXE="$HOME_DIR/tools/steamwebhelper-wrap.exe"
+WEBHELPER_FLAGS="--disable-gpu --disable-gpu-compositing --in-process-gpu --disable-features=CalculateNativeWinOcclusion --disable-direct-composition"
 
 bottle_path() {
   local name="${1:-$DEFAULT_BOTTLE}"
@@ -94,6 +96,19 @@ configure_bottle() {
 
 steam_installed() { [ -f "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steam.exe" ]; }
 
+# A janela da Steam fica preta no Wine do macOS porque o navegador interno (steamwebhelper)
+# desenha pela GPU. O embrulho chama o steamwebhelper original com opções do Chromium para
+# desenhar por software. Se a Steam se atualizar e trocar o arquivo, ele é reaplicado aqui.
+fix_webhelper() {
+  local dir="$WINEPREFIX/drive_c/Program Files (x86)/Steam/bin/cef/cef.win64"
+  [ -f "$dir/steamwebhelper.exe" ] && [ -f "$WRAP_EXE" ] || return 0
+  if ! cmp -s "$WRAP_EXE" "$dir/steamwebhelper.exe"; then
+    mv -f "$dir/steamwebhelper.exe" "$dir/steamwebhelper_real.exe"
+    cp "$WRAP_EXE" "$dir/steamwebhelper.exe"
+  fi
+  echo "$WEBHELPER_FLAGS" > "$dir/winmac_flags.txt"
+}
+
 steam_apps() { echo "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamapps"; }
 
 case "$1" in
@@ -127,6 +142,7 @@ case "$1" in
     done ;;
   steam)
     setup_env "$2"
+    fix_webhelper
     nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" >/dev/null 2>&1 & echo "Steam abrindo..." ;;
   play)
     setup_env "$3"
@@ -136,7 +152,8 @@ case "$1" in
       id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
-    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" -silent -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
+    fix_webhelper
+    nohup "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" -applaunch "$id" >/dev/null 2>&1 & echo "Abrindo jogo $id..." ;;
   run)
     setup_env "$3"
     nohup "$WINE" "$2" >/dev/null 2>&1 & ;;

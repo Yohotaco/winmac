@@ -23,5 +23,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 codesign --force --deep -s - "$APP"
 mkdir -p "$HOME/winmac/Bottles" && cp ../winmac "$HOME/winmac/winmac" && chmod +x "$HOME/winmac/winmac"
+mkdir -p "$HOME/winmac/tools" && cp ../tools/steamwebhelper-wrap.exe "$HOME/winmac/tools/"
 rm -rf /Applications/WinMac.app && cp -R "$APP" /Applications/
 echo "Instalado em /Applications/WinMac.app"
