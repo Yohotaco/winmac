@@ -31,6 +31,11 @@ Se aparecer `this SDK is not supported by the compiler`, as ferramentas da Apple
 
 Para usar o comando no terminal: `ln -sf ~/winmac/winmac /opt/homebrew/bin/winmac`
 
+## Steam do Mac e Steam do CrossOver
+
+- **Steam do Mac:** se você tem a Steam nativa do macOS, os jogos dela aparecem no WinMac na seção **Steam do Mac** e abrem pela própria Steam do Mac, na versão nativa (os saves continuam os mesmos). O login da Steam do WinMac é separado: entre uma vez na conta (o QR code do app Steam no celular é o jeito mais rápido); depois a Steam Cloud traz os saves dos jogos.
+- **Steam do CrossOver:** ao clicar em **Instalar Steam**, se existir uma Steam num bottle do CrossOver, o WinMac traz esse bottle (jogos, saves e login) em vez de instalar outra. Também dá para rodar `winmac import`.
+
 ## Uso
 
 | Comando | O que faz |

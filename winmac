@@ -6,6 +6,8 @@
 #   winmac steam [bottle]     abre a Steam
 #   winmac play <appid|nome>  abre um jogo pela Steam
 #   winmac run <exe> [bottle] roda qualquer .exe
+#   winmac detect             lista bottles do CrossOver que têm Steam (nome<TAB>nº de jogos)
+#   winmac import             traz para o WinMac todos os bottles do CrossOver que têm Steam (jogos, saves, login)
 #   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
 #   winmac kill [bottle]      fecha tudo que está rodando no bottle
 #   winmac restore [bottle]   restaura o registro original do CrossOver (backup)
@@ -140,12 +142,58 @@ launch_steam() {
   disown
 }
 
+# Bottles do CrossOver com Steam instalada que ainda não foram trazidos para o WinMac
+cx_steam_bottles() {
+  local b
+  for b in "$CX_BOTTLES"/*; do
+    [ -d "$b" ] && [ ! -L "$b" ] && [ -f "$b/drive_c/Program Files (x86)/Steam/steam.exe" ] && basename "$b"
+  done
+}
+
+count_games() { ls "$1/drive_c/Program Files (x86)/Steam/steamapps/"appmanifest_*.acf 2>/dev/null | grep -vc appmanifest_228980; }
+
+# Move cada bottle do CrossOver com Steam para ~/winmac/Bottles, deixando um atalho no lugar antigo
+# (o CrossOver continua achando ele). Jogos, saves e o login da Steam vêm junto.
+import_crossover() {
+  local names name dest n=0
+  names=$(cx_steam_bottles)
+  [ -n "$names" ] || { echo "Nenhuma Steam do CrossOver encontrada."; return 1; }
+  if pgrep -f "CrossOver.app/" >/dev/null; then
+    echo "Fechando o CrossOver..."
+    osascript -e 'quit app "CrossOver"' >/dev/null 2>&1
+    for name in $names; do
+      WINEPREFIX="$CX_BOTTLES/$name" /Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wineserver -k 2>/dev/null
+    done
+    for i in $(seq 1 15); do pgrep -f "CrossOver.app/" >/dev/null || break; sleep 1; done
+    pgrep -f "CrossOver.app/.*wineserver" >/dev/null && { echo "Não consegui fechar o CrossOver. Feche ele e tente de novo."; return 1; }
+  fi
+  mkdir -p "$HOME_DIR/Bottles"
+  while IFS= read -r name; do
+    dest="$name"; [ -e "$HOME_DIR/Bottles/$dest" ] && dest="$name (CrossOver)"
+    echo "Trazendo '$name' do CrossOver..."
+    mv "$CX_BOTTLES/$name" "$HOME_DIR/Bottles/$dest" && ln -s "$HOME_DIR/Bottles/$dest" "$CX_BOTTLES/$name" || continue
+    ( setup_env "$dest" )   # guarda as DLLs do CrossOver e instala o DXVK
+    echo "Pronto: '$dest' com $(count_games "$HOME_DIR/Bottles/$dest") jogo(s)."
+    n=$((n + 1))
+  done <<< "$names"
+  [ $n -gt 0 ]
+}
+
 steam_apps() { echo "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamapps"; }
 
 case "$1" in
+  detect)
+    cx_steam_bottles | while IFS= read -r b; do printf "%s\t%s\n" "$b" "$(count_games "$CX_BOTTLES/$b")"; done ;;
+  import)
+    install_wine
+    import_crossover && echo "Steam do CrossOver importada! Clique em Abrir Steam." ;;
   setup)
     name="${2:-$DEFAULT_BOTTLE}"
     install_wine
+    # Se já existe uma Steam no CrossOver, usa ela (com jogos, saves e login) em vez de instalar outra
+    if [ -n "$(cx_steam_bottles)" ] && ! steam_installed "$name"; then
+      import_crossover && { echo "Steam do CrossOver importada! Clique em Abrir Steam."; exit 0; }
+    fi
     if steam_installed "$name"; then echo "A Steam já está instalada no bottle '$name'."; exit 0; fi
     mkdir -p "$HOME_DIR/Bottles/$name"
     setup_env "$name"

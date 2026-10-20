@@ -6,6 +6,9 @@ let winmacScript = "\(home)/winmac/winmac"
 let bottlesDir = "\(home)/winmac/Bottles"
 let steamSubdir = "drive_c/Program Files (x86)/Steam"
 let hiddenApps: Set<String> = ["228980"] // Steamworks Common Redistributables
+// Steam nativa do macOS: os jogos dela aparecem no WinMac e abrem pela própria Steam do Mac
+let macSteamDir = "\(home)/Library/Application Support/Steam"
+let macSteamName = "Steam do Mac"
 
 struct Game: Identifiable {
     let id: String
@@ -15,12 +18,17 @@ struct Game: Identifiable {
 
 struct Bottle: Identifiable, Hashable {
     let id: String
-    var path: String { "\(bottlesDir)/\(id)" }
+    var isMac = false
+    var path: String { isMac ? macSteamDir : "\(bottlesDir)/\(id)" }
+    /// Pasta da Steam: no Mac é a própria pasta; nos bottles fica dentro do drive C:
+    var steamDir: String { isMac ? macSteamDir : "\(path)/\(steamSubdir)" }
 }
 
 func loadBottles() -> [Bottle] {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: bottlesDir)) ?? []
-    return names.filter { !$0.hasPrefix(".") }.sorted().map { Bottle(id: $0) }
+    var list = names.filter { !$0.hasPrefix(".") }.sorted().map { Bottle(id: $0) }
+    if FileManager.default.fileExists(atPath: "\(macSteamDir)/steamapps") { list.append(Bottle(id: macSteamName, isMac: true)) }
+    return list
 }
 
 func acfValue(_ key: String, in text: String) -> String? {
@@ -43,7 +51,7 @@ func coverImage(for appid: String, steamDir: String) -> NSImage? {
 }
 
 func loadGames(_ bottle: Bottle) -> [Game] {
-    let steamDir = "\(bottle.path)/\(steamSubdir)"
+    let steamDir = bottle.steamDir
     let apps = "\(steamDir)/steamapps"
     let files = (try? FileManager.default.contentsOfDirectory(atPath: apps)) ?? []
     return files.filter { $0.hasPrefix("appmanifest_") && $0.hasSuffix(".acf") }.compactMap { f in
@@ -79,7 +87,21 @@ final class Model: ObservableObject {
 
     var steamInstalled: Bool {
         guard let b = selected else { return false }
+        if b.isMac { return true }
         return FileManager.default.fileExists(atPath: "\(b.path)/\(steamSubdir)/steam.exe")
+    }
+
+    // Steam do Mac: abre pela própria Steam (steam://), versão nativa do jogo
+    func openSteam() {
+        guard let b = selected else { return }
+        if b.isMac { NSWorkspace.shared.open(URL(string: "steam://open/games")!); status = "Steam do Mac aberta"; return }
+        run(["steam", b.id])
+    }
+
+    func play(_ g: Game) {
+        guard let b = selected else { return }
+        if b.isMac { NSWorkspace.shared.open(URL(string: "steam://rungameid/\(g.id)")!); status = "Abrindo \(g.name)…"; return }
+        run(["play", g.id, b.id])
     }
 
     func reload() {
@@ -189,7 +211,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(model.bottles, selection: $model.selected) { b in
-                Label(b.id, systemImage: "shippingbox.fill").tag(b)
+                Label(b.id, systemImage: b.isMac ? "apple.logo" : "shippingbox.fill").tag(b)
             }
             .navigationTitle("Bottles")
             .onChange(of: model.selected) { _, _ in model.reload() }
@@ -199,14 +221,16 @@ struct ContentView: View {
             } else {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
-                    Button { model.run(["steam", model.selected?.id ?? "Steam"]) } label: {
+                    Button { model.openSteam() } label: {
                         Label("Abrir Steam", systemImage: "play.fill").padding(.horizontal, 8)
                     }
                     .controlSize(.large).buttonStyle(.borderedProminent)
-                    Button { model.run(["kill", model.selected?.id ?? "Steam"]) } label: {
-                        Label("Fechar tudo", systemImage: "stop.fill")
+                    if model.selected?.isMac != true {
+                        Button { model.run(["kill", model.selected?.id ?? "Steam"]) } label: {
+                            Label("Fechar tudo", systemImage: "stop.fill")
+                        }
+                        .controlSize(.large)
                     }
-                    .controlSize(.large)
                     Spacer()
                     Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     Button { model.reload() } label: { Image(systemName: "arrow.clockwise") }
@@ -220,7 +244,7 @@ struct ContentView: View {
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 20)], spacing: 24) {
                         ForEach(model.games) { g in
-                            GameCard(game: g) { model.run(["play", g.id, model.selected?.id ?? "Steam"]) }
+                            GameCard(game: g) { model.play(g) }
                         }
                     }
                     .padding(20)
