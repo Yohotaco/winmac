@@ -68,9 +68,15 @@ Para recompilar o embrulho: `x86_64-w64-mingw32-gcc -O2 -municode -mwindows -o t
 
 Alguns jogos (como *How to Train Your Cock* / *Como Treinar o Seu Pinto*) ficam por cima da área de trabalho com o fundo transparente. No Windows eles usam `DwmExtendFrameIntoClientArea`, que o Wine do macOS não implementa, e o fundo fica preto.
 
-O WinMac resolve com [`tools/transparent.m`](tools/transparent.m): um módulo do macOS carregado nos processos do Wine (`DYLD_INSERT_LIBRARIES`) que deixa a janela Cocoa e a camada Metal desses jogos não opacas. O `winmac` detecta os jogos Unity que usam `DwmExtendFrameIntoClientArea` e só ativa o módulo neles. Se a Steam já estava aberta antes de instalar um jogo desses, feche e abra a Steam pelo WinMac de novo.
+O WinMac resolve com [`tools/transparent.m`](tools/transparent.m), um módulo do macOS carregado nos processos do Wine (`DYLD_INSERT_LIBRARIES`). Só nesses jogos, ele:
 
-Para recompilar o módulo: `clang -arch x86_64 -dynamiclib -fobjc-arc -framework Foundation -framework QuartzCore -o tools/winmac-transparent.dylib tools/transparent.m && codesign -s - -f tools/winmac-transparent.dylib`
+- deixa a janela Cocoa e a camada Metal não opacas (fundo transparente);
+- coloca a janela acima de todos os apps e em todos os Spaces, inclusive sobre apps em tela cheia. Para isso o processo do jogo vira um app "acessório", sem ícone no Dock nem no Cmd+Tab;
+- deixa os cliques atravessarem as partes transparentes: ele lê o alfa do pixel embaixo do mouse no último quadro desenhado. Se não conseguir ler, deixa o clique passar, para nunca prender a tela.
+
+O `winmac` detecta os jogos Unity que usam `DwmExtendFrameIntoClientArea` e só ativa o módulo neles. Se a Steam já estava aberta antes de instalar um jogo desses, feche e abra a Steam pelo WinMac de novo.
+
+Para recompilar o módulo: `clang -arch x86_64 -dynamiclib -fobjc-arc -framework Foundation -framework QuartzCore -framework Metal -o tools/winmac-transparent.dylib tools/transparent.m && codesign -s - -f tools/winmac-transparent.dylib`
 
 ## Licença
 
