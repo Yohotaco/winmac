@@ -133,6 +133,11 @@ transparent_exes() {
 
 # Abre a Steam (com argumentos extras) já com o módulo de transparência
 launch_steam() {
+  # Sobras de uma sessão do Wine que travou (processos sem wineserver) impedem a Steam de abrir
+  if ! pgrep -x wineserver >/dev/null && pgrep -f '^C:\\' >/dev/null; then
+    pkill -9 -f '^C:\\'
+    sleep 1
+  fi
   export WINMAC_TRANSPARENT_EXES="$(transparent_exes "$BOTTLE")"
   if [ -n "$WINMAC_TRANSPARENT_EXES" ] && [ -f "$TRANSPARENT_DYLIB" ]; then
     export DYLD_INSERT_LIBRARIES="$TRANSPARENT_DYLIB"
