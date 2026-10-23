@@ -31,6 +31,17 @@ Se aparecer `this SDK is not supported by the compiler`, as ferramentas da Apple
 
 Para usar o comando no terminal: `ln -sf ~/winmac/winmac /opt/homebrew/bin/winmac`
 
+## Mais FPS com o D3DMetal da Apple
+
+Se o [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/) da Apple estiver instalado em `/Applications`, o WinMac abre os jogos com o **D3DMetal**, que traduz o DirectX direto para Metal. É bem mais rápido que o DXVK: no *Internet Cafe Simulator* (M2), o menu foi de 22 para 89 FPS.
+
+- A Steam continua no Wine Staging. Só o jogo abre no Wine do Game Porting Toolkit, num bottle separado (`~/winmac/Bottles/.d3dmetal-<bottle>`).
+- Os saves em arquivo ficam na mesma pasta de usuário. Nos jogos Unity, as configurações e saves do registro são copiados na ida e na volta.
+- Jogos abertos assim não passam pela Steam: não contam conquistas nem tempo de jogo.
+- Se o jogo fechar em menos de 20 segundos (por exemplo, porque exige a Steam), o WinMac abre ele pela Steam e lembra disso. Para escolher na mão: `winmac d3dmetal <appid> on|off`.
+
+O WinMac não inclui o D3DMetal (a licença da Apple não permite redistribuir); ele usa o que já está instalado no Mac.
+
 ## Steam do Mac e Steam do CrossOver
 
 - **Steam do Mac:** se você tem a Steam nativa do macOS, os jogos dela aparecem no WinMac na seção **Steam do Mac** e abrem pela própria Steam do Mac, na versão nativa (os saves continuam os mesmos). O login da Steam do WinMac é separado: entre uma vez na conta (o QR code do app Steam no celular é o jeito mais rápido); depois a Steam Cloud traz os saves dos jogos.
@@ -43,7 +54,8 @@ Para usar o comando no terminal: `ln -sf ~/winmac/winmac /opt/homebrew/bin/winma
 | `winmac setup [bottle]` | Instala o Wine e a Steam oficial num bottle novo |
 | `winmac list` | Lista os bottles e os jogos da Steam |
 | `winmac steam [bottle]` | Abre a Steam |
-| `winmac play <appid\|nome>` | Abre um jogo pela Steam |
+| `winmac play <appid\|nome>` | Abre um jogo (com o D3DMetal, se disponível) |
+| `winmac d3dmetal <appid> on\|off` | Liga ou desliga o D3DMetal num jogo |
 | `winmac run <exe> [bottle]` | Roda qualquer `.exe` |
 | `winmac migrate [bottle]` | Move um bottle do CrossOver para `~/winmac/Bottles` e deixa um atalho no lugar antigo |
 | `winmac kill [bottle]` | Fecha tudo que está rodando no bottle |

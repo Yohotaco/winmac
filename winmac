@@ -4,7 +4,8 @@
 #   winmac setup [bottle]     instala o Wine (se faltar) e a Steam oficial num bottle novo
 #   winmac list               lista bottles e jogos da Steam
 #   winmac steam [bottle]     abre a Steam
-#   winmac play <appid|nome>  abre um jogo pela Steam
+#   winmac play <appid|nome>  abre um jogo (com o D3DMetal da Apple, se o Game Porting Toolkit estiver instalado)
+#   winmac d3dmetal <appid> on|off   liga/desliga o D3DMetal num jogo
 #   winmac run <exe> [bottle] roda qualquer .exe
 #   winmac detect             lista bottles do CrossOver que têm Steam (nome<TAB>nº de jogos)
 #   winmac import             traz para o WinMac todos os bottles do CrossOver que têm Steam (jogos, saves, login)
@@ -147,6 +148,97 @@ launch_steam() {
   disown
 }
 
+# ---------- D3DMetal (Game Porting Toolkit da Apple) ----------
+# O D3DMetal traduz DirectX 11/12 direto para Metal e é bem mais rápido que o DXVK (ex.: Internet Cafe
+# Simulator: 22 → 89 FPS no M2). Ele só funciona no Wine do Game Porting Toolkit, que não roda a Steam;
+# por isso a Steam continua no Wine Staging e o jogo abre direto no Wine do GPTK, num bottle-sombra
+# (~/winmac/Bottles/.d3dmetal-<bottle>) que usa a mesma pasta de usuário (saves em arquivo) e copia as
+# configurações/saves do Unity (registro) na ida e na volta. Se o jogo fechar logo (ex.: exige a Steam),
+# o WinMac abre pela Steam e lembra disso para a próxima vez.
+GPTK_DIR="/Applications/Game Porting Toolkit.app/Contents/Resources/wine"
+GPTK_WINE="$GPTK_DIR/bin/wine64"
+GPTK_WINESERVER="$GPTK_DIR/bin/wineserver"
+D3DM_OFF="$HOME_DIR/d3dmetal-off"   # appids que não abrem com o D3DMetal
+
+has_d3dmetal() { [ -x "$GPTK_WINE" ] && [ -d "$GPTK_DIR/lib/external/D3DMetal.framework" ]; }
+d3dmetal_off() { grep -qx "$1" "$D3DM_OFF" 2>/dev/null; }
+set_d3dmetal() {
+  touch "$D3DM_OFF"; grep -vx "$1" "$D3DM_OFF" > "$D3DM_OFF.tmp"; mv "$D3DM_OFF.tmp" "$D3DM_OFF"
+  [ "$2" = off ] && echo "$1" >> "$D3DM_OFF"
+}
+
+# .exe principal do jogo: o do Unity (tem a pasta <nome>_Data) ou o maior .exe que não é instalador/ajudante
+game_exe() {
+  local dir="$1" e best
+  while IFS= read -r e; do
+    [ -d "${e%.exe}_Data" ] && { echo "$e"; return; }
+  done < <(find "$dir" -maxdepth 3 -iname '*.exe' 2>/dev/null)
+  best=$(find "$dir" -maxdepth 3 -iname '*.exe' 2>/dev/null \
+    | grep -viE 'unitycrashhandler|unins|setup|redist|vcredist|dxsetup|crashreport|easyanticheat|battleye|_be\.exe' \
+    | while IFS= read -r e; do echo "$(stat -f %z "$e") $e"; done | sort -rn | head -1 | cut -d' ' -f2-)
+  echo "$best"
+}
+
+# Chave do registro onde o Unity guarda configurações e saves (PlayerPrefs)
+unity_prefs_key() {
+  local info="${1%.exe}_Data/app.info" company product
+  [ -f "$info" ] || return 1
+  company=$(sed -n 1p "$info" | tr -d '\r'); product=$(sed -n 2p "$info" | tr -d '\r')
+  [ -n "$company" ] && [ -n "$product" ] && echo "HKCU\\Software\\$company\\$product"
+}
+
+# Copia uma chave do registro de um bottle para outro (apaga a antiga no destino antes)
+copy_reg_key() {  # <wine origem> <prefixo origem> <wine destino> <prefixo destino> <chave>
+  local tmp="winmac-sync-$$.reg"
+  WINEPREFIX="$2" "$1" reg export "$5" "C:\\$tmp" /y >/dev/null 2>&1 || return 1
+  mv "$2/drive_c/$tmp" "$4/drive_c/$tmp" || return 1
+  WINEPREFIX="$4" "$3" reg delete "$5" /f >/dev/null 2>&1
+  WINEPREFIX="$4" "$3" reg import "C:\\$tmp" >/dev/null 2>&1
+  rm -f "$4/drive_c/$tmp"
+}
+
+# Bottle-sombra do GPTK, que divide a pasta de usuário (AppData, Documentos) com o bottle da Steam
+d3dmetal_prefix() {
+  local shadow="$HOME_DIR/Bottles/.d3dmetal-$(basename "$WINEPREFIX")" u="$USER"
+  if [ ! -d "$shadow/drive_c/windows" ]; then
+    echo "Preparando o D3DMetal (só na primeira vez)..." >&2
+    WINEPREFIX="$shadow" "$GPTK_WINE" wineboot -i >/dev/null 2>&1
+    WINEPREFIX="$shadow" "$GPTK_WINESERVER" -w
+  fi
+  if [ -d "$WINEPREFIX/drive_c/users/$u" ] && [ ! -L "$shadow/drive_c/users/$u" ]; then
+    rm -rf "$shadow/drive_c/users/$u" && ln -s "$WINEPREFIX/drive_c/users/$u" "$shadow/drive_c/users/$u"
+  fi
+  echo "$shadow"
+}
+
+# Abre o jogo com o D3DMetal; volta para a Steam se não der. Retorna 1 se nem tentou.
+play_d3dmetal() {
+  local id="$1" acf dir exe key shadow
+  has_d3dmetal && ! d3dmetal_off "$id" || return 1
+  acf="$(steam_apps "$BOTTLE")/appmanifest_$id.acf"
+  [ -f "$acf" ] || return 1
+  dir="$(steam_apps "$BOTTLE")/common/$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)".*/\1/p' "$acf")"
+  exe=$(game_exe "$dir")
+  [ -n "$exe" ] || return 1
+  case ":$(transparent_exes "$BOTTLE"):" in *":$(basename "$exe"):"*) return 1 ;; esac
+  shadow=$(d3dmetal_prefix) || return 1
+  key=$(unity_prefs_key "$exe")
+  (
+    [ -n "$key" ] && copy_reg_key "$WINE" "$WINEPREFIX" "$GPTK_WINE" "$shadow" "$key"
+    start=$(date +%s)
+    cd "$(dirname "$exe")" && WINEPREFIX="$shadow" "$GPTK_WINE" "$(basename "$exe")"
+    WINEPREFIX="$shadow" "$GPTK_WINESERVER" -w
+    if [ $(( $(date +%s) - start )) -lt 20 ]; then
+      set_d3dmetal "$id" off      # não abriu: na próxima vez vai direto pela Steam
+      fix_webhelper; launch_steam -applaunch "$id"
+    elif [ -n "$key" ]; then
+      copy_reg_key "$GPTK_WINE" "$shadow" "$WINE" "$WINEPREFIX" "$key"
+    fi
+  ) >/dev/null 2>&1 &
+  disown
+  echo "Abrindo jogo $id com o D3DMetal da Apple..."
+}
+
 # Bottles do CrossOver com Steam instalada que ainda não foram trazidos para o WinMac
 cx_steam_bottles() {
   local b
@@ -236,8 +328,13 @@ case "$1" in
       id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
+    BOTTLE="$3"
+    play_d3dmetal "$id" && exit 0
     fix_webhelper
-    BOTTLE="$3"; launch_steam -applaunch "$id"; echo "Abrindo jogo $id..." ;;
+    launch_steam -applaunch "$id"; echo "Abrindo jogo $id..." ;;
+  d3dmetal)
+    [[ "$2" =~ ^[0-9]+$ ]] && [[ "$3" =~ ^(on|off)$ ]] || { echo "Uso: winmac d3dmetal <appid> on|off"; exit 1; }
+    set_d3dmetal "$2" "$3"; echo "D3DMetal $3 para o jogo $2." ;;
   run)
     setup_env "$3"
     nohup "$WINE" "$2" >/dev/null 2>&1 & ;;
