@@ -174,7 +174,7 @@ game_exe() {
     [ -d "${e%.exe}_Data" ] && { echo "$e"; return; }
   done < <(find "$dir" -maxdepth 3 -iname '*.exe' 2>/dev/null)
   best=$(find "$dir" -maxdepth 3 -iname '*.exe' 2>/dev/null \
-    | grep -viE 'unitycrashhandler|unins|setup|redist|vcredist|dxsetup|crashreport|easyanticheat|battleye|_be\.exe' \
+    | grep -viE 'unitycrashhandler|trial|demo|unins|setup|redist|vcredist|dxsetup|crashreport|easyanticheat|battleye|_be\.exe' \
     | while IFS= read -r e; do echo "$(stat -f %z "$e") $e"; done | sort -rn | head -1 | cut -d' ' -f2-)
   echo "$best"
 }
@@ -218,6 +218,10 @@ play_d3dmetal() {
   acf="$(steam_apps "$BOTTLE")/appmanifest_$id.acf"
   [ -f "$acf" ] || return 1
   dir="$(steam_apps "$BOTTLE")/common/$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)".*/\1/p' "$acf")"
+  # Jogos que dependem de outro launcher (EA app, Ubisoft Connect, Rockstar) precisam abrir pela Steam,
+  # onde o launcher está instalado
+  [ -d "$dir/__Installer" ] || [ -f "$dir/EAStore.ini" ] || [ -n "$(find "$dir" -maxdepth 2 \( -iname 'uplay_r1_loader*.dll' \
+    -o -iname 'upc_r*_loader*.dll' -o -iname 'PlayGTAV.exe' -o -iname 'Link2EA*' \) 2>/dev/null | head -1)" ] && return 1
   exe=$(game_exe "$dir")
   [ -n "$exe" ] || return 1
   case ":$(transparent_exes "$BOTTLE"):" in *":$(basename "$exe"):"*) return 1 ;; esac
