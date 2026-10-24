@@ -42,6 +42,14 @@ Se o [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolk
 
 O WinMac não inclui o D3DMetal (a licença da Apple não permite redistribuir); ele usa o que já está instalado no Mac.
 
+## DirectX 11 direto em Metal com o DXMT
+
+Os jogos abertos pela Steam usam o [DXMT](https://github.com/3Shain/dxmt) (código aberto), que traduz DirectX 10/11 direto para Metal, sem passar pelo Vulkan. É mais rápido que o DXVK e funciona com jogos que dependem da Steam ou de outro launcher (ex.: *Need for Speed Heat* com o app da EA). O `winmac` baixa o DXMT sozinho e copia os arquivos para o bottle toda vez que abre a Steam.
+
+O DXMT precisa que o Wine exporte umas funções do driver de janelas do Mac (`macdrv_functions`), coisa que só o Wine do CrossOver faz. O WinMac fornece essas funções com o módulo [`tools/dxmt_shim.m`](tools/dxmt_shim.m), carregado nos processos do Wine junto com a Steam. Ele usa as classes do próprio Wine (`WineWindow`, `WineContentView`, `WineMetalView`) para criar a camada Metal na janela do jogo.
+
+Para recompilar: `clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -framework Foundation -framework QuartzCore -framework Metal -Wl,-undefined,dynamic_lookup -o tools/winmac-dxmt.dylib tools/dxmt_shim.m && codesign -s - -f tools/winmac-dxmt.dylib`
+
 ## Steam do Mac e Steam do CrossOver
 
 - **Steam do Mac:** se você tem a Steam nativa do macOS, os jogos dela aparecem no WinMac na seção **Steam do Mac** e abrem pela própria Steam do Mac, na versão nativa (os saves continuam os mesmos). O login da Steam do WinMac é separado: entre uma vez na conta (o QR code do app Steam no celular é o jeito mais rápido); depois a Steam Cloud traz os saves dos jogos.
@@ -64,7 +72,7 @@ Os bottles ficam em `~/winmac/Bottles/<nome>`. Se a pasta não existir, o WinMac
 
 ## Limitações
 
-- DirectX 10/11 roda pelo [DXVK-macOS](https://github.com/Gcenx/DXVK-macOS), que o WinMac instala sozinho em cada bottle. DirectX 12 não é suportado (não tem D3DMetal).
+- DirectX 10/11 roda pelo DXMT (ou pelo D3DMetal, quando o Game Porting Toolkit está instalado e o jogo abre sem a Steam). DirectX 12 só funciona com o D3DMetal.
 - Bottles vindos do CrossOver: o WinMac guarda as DLLs de GPU específicas do CrossOver em `~/winmac/crossover-dlls/`, porque elas derrubam o Wine comum.
 - Jogos com anti-cheat em modo kernel (EA Javelin, Vanguard, etc.) não funcionam.
 - Não use o mesmo bottle no CrossOver e no WinMac ao mesmo tempo.

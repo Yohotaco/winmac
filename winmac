@@ -121,6 +121,7 @@ fix_webhelper() {
 # que o Wine do macOS não implementa: o fundo fica preto. O winmac-transparent.dylib é carregado nos
 # processos do Wine e deixa a janela desses jogos transparente. A lista é montada procurando, nos jogos
 # Unity instalados, o uso de DwmExtendFrameIntoClientArea.
+DXMT_DYLIB="$HOME_DIR/tools/winmac-dxmt.dylib"
 TRANSPARENT_DYLIB="$HOME_DIR/tools/winmac-transparent.dylib"
 transparent_exes() {
   local common="$(steam_apps "$1")/common" dll dir exes=""
@@ -132,17 +133,46 @@ transparent_exes() {
   echo "${exes#:}"
 }
 
+# DXMT (DirectX 10/11 -> Metal, código aberto: github.com/3Shain/dxmt). Mais rápido que o DXVK porque não
+# passa pelo Vulkan/MoltenVK. Os arquivos ficam em ~/winmac/dxmt/<versão> e são copiados para o bottle a
+# cada abertura da Steam (o Wine às vezes apaga o winemetal.dll da pasta de sistema).
+DXMT_URL="https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz"
+install_dxmt() {
+  local src win="$WINEPREFIX/drive_c/windows" d
+  src=$(ls -d "$HOME_DIR"/dxmt/v* 2>/dev/null | sort -V | tail -1)
+  if [ -z "$src" ]; then
+    mkdir -p "$HOME_DIR/dxmt" && curl -fsL "$DXMT_URL" | tar -xz -C "$HOME_DIR/dxmt" || return 1
+    src=$(ls -d "$HOME_DIR"/dxmt/v* | sort -V | tail -1)
+  fi
+  [ -f "$DXMT_DYLIB" ] || return 1
+  # winemetal.so (parte macOS) tem que ficar ao lado das outras do Wine
+  cmp -s "$src/x86_64-unix/winemetal.so" "$(dirname "$WINE")/../lib/wine/x86_64-unix/winemetal.so" ||
+    cp "$src/x86_64-unix/winemetal.so" "$(dirname "$WINE")/../lib/wine/x86_64-unix/" || return 1
+  cp "$src"/x86_64-windows/*.dll "$win/system32/" && cp "$src"/i386-windows/*.dll "$win/syswow64/"
+  if [ ! -f "$WINEPREFIX/.winmac-dxmt" ]; then
+    for d in d3d11 d3d10core dxgi winemetal; do
+      "$WINE" reg add 'HKCU\Software\Wine\DllOverrides' /v $d /t REG_SZ /d native,builtin /f >/dev/null 2>&1
+    done
+    touch "$WINEPREFIX/.winmac-dxmt"
+  fi
+}
+
 # Abre a Steam (com argumentos extras) já com o módulo de transparência
 launch_steam() {
+  install_dxmt
   # Sobras de uma sessão do Wine que travou (processos sem wineserver) impedem a Steam de abrir
   if ! pgrep -x wineserver >/dev/null && pgrep -f '^C:\\' >/dev/null; then
     pkill -9 -f '^C:\\'
     sleep 1
   fi
   export WINMAC_TRANSPARENT_EXES="$(transparent_exes "$BOTTLE")"
+  local inject=""
+  # DXMT (DirectX 11 -> Metal) precisa do módulo winmac-dxmt.dylib para criar a tela Metal na janela
+  [ -f "$DXMT_DYLIB" ] && inject="$DXMT_DYLIB"
   if [ -n "$WINMAC_TRANSPARENT_EXES" ] && [ -f "$TRANSPARENT_DYLIB" ]; then
-    export DYLD_INSERT_LIBRARIES="$TRANSPARENT_DYLIB"
+    inject="${inject:+$inject:}$TRANSPARENT_DYLIB"
   fi
+  [ -n "$inject" ] && export DYLD_INSERT_LIBRARIES="$inject"
   # Sem nohup: ele é um programa protegido do macOS e apagaria o DYLD_INSERT_LIBRARIES
   "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" "$@" >/dev/null 2>&1 &
   disown
