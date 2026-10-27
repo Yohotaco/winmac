@@ -27,6 +27,8 @@ struct Bottle: Identifiable, Hashable {
 func loadBottles() -> [Bottle] {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: bottlesDir)) ?? []
     var list = names.filter { !$0.hasPrefix(".") }.sorted().map { Bottle(id: $0) }
+    // Sem nenhuma Steam de Windows ainda: mostra o bottle "Steam" para aparecer o botão Instalar Steam
+    if list.isEmpty { list.append(Bottle(id: "Steam")) }
     if FileManager.default.fileExists(atPath: "\(macSteamDir)/steamapps") { list.append(Bottle(id: macSteamName, isMac: true)) }
     return list
 }
@@ -211,7 +213,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(model.bottles, selection: $model.selected) { b in
-                Label(b.id, systemImage: b.isMac ? "apple.logo" : "shippingbox.fill").tag(b)
+                Label(b.isMac || b.id != "Steam" ? b.id : "Steam (Windows)", systemImage: b.isMac ? "apple.logo" : "pc").tag(b)
             }
             .navigationTitle("Bottles")
             .onChange(of: model.selected) { _, _ in model.reload() }
