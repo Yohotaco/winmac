@@ -275,25 +275,28 @@ play_d3dmetal() {
 }
 
 # ---------- Atualização automática (o app chama "winmac update <caminho do app>" ao abrir) ----------
-REPO_RAW="https://raw.githubusercontent.com/Yohotaco/winmac/main"
-REPO_LATEST="https://api.github.com/repos/Yohotaco/winmac/releases/latest"
+# Tudo vem da última versão publicada (tag), e não do main: assim nunca chega um arquivo pela metade
+# ou de cache antigo, e o app, o comando e as ferramentas sempre ficam da mesma versão.
+REPO="Yohotaco/winmac"
 self_update() {
   local app="$1" tmp f latest cur
+  latest=$(curl -fsL --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" |
+    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  [ -n "$latest" ] || return 0
   tmp=$(mktemp -d) || return 1
   # Comando e ferramentas: troca só o que mudou (mv cria arquivo novo, então não atrapalha quem está usando)
   for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib; do
-    curl -fsL --max-time 60 -o "$tmp/new" "$REPO_RAW/$f" && [ -s "$tmp/new" ] || continue
+    curl -fsL --max-time 60 -o "$tmp/new" "https://raw.githubusercontent.com/$REPO/$latest/$f" && [ -s "$tmp/new" ] || continue
     cmp -s "$tmp/new" "$HOME_DIR/$f" && continue
     mkdir -p "$(dirname "$HOME_DIR/$f")" && chmod +x "$tmp/new" && mv "$tmp/new" "$HOME_DIR/$f" && echo "Atualizado: $f"
   done
-  # App: compara a versão instalada com a última versão publicada no GitHub
+  # App: compara a versão instalada com a publicada
   if [ -n "$app" ] && [ -d "$app/Contents" ]; then
-    latest=$(curl -fsL --max-time 30 "$REPO_LATEST" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)
     cur=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null || echo 0)
-    if [ -n "$latest" ] && [ "$latest" != "$cur" ] && [ "$(printf '%s\n%s\n' "$cur" "$latest" | sort -V | tail -1)" = "$latest" ]; then
-      curl -fsL --max-time 300 -o "$tmp/app.zip" "https://github.com/Yohotaco/winmac/releases/latest/download/WinMac.zip" &&
+    if [ "${latest#v}" != "$cur" ] && [ "$(printf '%s\n%s\n' "$cur" "${latest#v}" | sort -V | tail -1)" = "${latest#v}" ]; then
+      curl -fsL --max-time 300 -o "$tmp/app.zip" "https://github.com/$REPO/releases/download/$latest/WinMac.zip" &&
         ditto -x -k "$tmp/app.zip" "$tmp/app" && [ -x "$tmp/app/WinMac.app/Contents/MacOS/WinMac" ] &&
-        rm -rf "$app" && mv "$tmp/app/WinMac.app" "$app" && echo "APP_ATUALIZADO $latest"
+        rm -rf "$app" && mv "$tmp/app/WinMac.app" "$app" && echo "APP_ATUALIZADO ${latest#v}"
     fi
   fi
   rm -rf "$tmp"
