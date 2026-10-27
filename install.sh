@@ -3,7 +3,9 @@
 # Uso: curl -fsSL https://raw.githubusercontent.com/Yohotaco/winmac/main/install.sh | bash
 set -e
 REPO="https://github.com/Yohotaco/winmac"
-RAW="https://raw.githubusercontent.com/Yohotaco/winmac/main"
+# Arquivos da última versão publicada (a mesma do app), não do main
+TAG=$(curl -fsL https://api.github.com/repos/Yohotaco/winmac/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+RAW="https://raw.githubusercontent.com/Yohotaco/winmac/${TAG:-main}"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
