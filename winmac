@@ -12,6 +12,7 @@
 #   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
 #   winmac kill [bottle]      fecha tudo que está rodando no bottle
 #   winmac restore [bottle]   restaura o registro original do CrossOver (backup)
+#   winmac update [app]       baixa a versão mais nova do comando, das ferramentas e do app (se passar o caminho)
 
 WINE="/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine"
 WINESERVER="/Applications/Wine Staging.app/Contents/Resources/wine/bin/wineserver"
@@ -273,6 +274,31 @@ play_d3dmetal() {
   echo "Abrindo jogo $id com o D3DMetal da Apple..."
 }
 
+# ---------- Atualização automática (o app chama "winmac update <caminho do app>" ao abrir) ----------
+REPO_RAW="https://raw.githubusercontent.com/Yohotaco/winmac/main"
+REPO_LATEST="https://api.github.com/repos/Yohotaco/winmac/releases/latest"
+self_update() {
+  local app="$1" tmp f latest cur
+  tmp=$(mktemp -d) || return 1
+  # Comando e ferramentas: troca só o que mudou (mv cria arquivo novo, então não atrapalha quem está usando)
+  for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib; do
+    curl -fsL --max-time 60 -o "$tmp/new" "$REPO_RAW/$f" && [ -s "$tmp/new" ] || continue
+    cmp -s "$tmp/new" "$HOME_DIR/$f" && continue
+    mkdir -p "$(dirname "$HOME_DIR/$f")" && chmod +x "$tmp/new" && mv "$tmp/new" "$HOME_DIR/$f" && echo "Atualizado: $f"
+  done
+  # App: compara a versão instalada com a última versão publicada no GitHub
+  if [ -n "$app" ] && [ -d "$app/Contents" ]; then
+    latest=$(curl -fsL --max-time 30 "$REPO_LATEST" | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)
+    cur=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null || echo 0)
+    if [ -n "$latest" ] && [ "$latest" != "$cur" ] && [ "$(printf '%s\n%s\n' "$cur" "$latest" | sort -V | tail -1)" = "$latest" ]; then
+      curl -fsL --max-time 300 -o "$tmp/app.zip" "https://github.com/Yohotaco/winmac/releases/latest/download/WinMac.zip" &&
+        ditto -x -k "$tmp/app.zip" "$tmp/app" && [ -x "$tmp/app/WinMac.app/Contents/MacOS/WinMac" ] &&
+        rm -rf "$app" && mv "$tmp/app/WinMac.app" "$app" && echo "APP_ATUALIZADO $latest"
+    fi
+  fi
+  rm -rf "$tmp"
+}
+
 # Bottles do CrossOver com Steam instalada que ainda não foram trazidos para o WinMac
 cx_steam_bottles() {
   local b
@@ -380,8 +406,10 @@ case "$1" in
     pgrep -f "CrossOver.app/.*wineserver" >/dev/null && { echo "Feche o CrossOver primeiro."; exit 1; }
     mkdir -p "$HOME_DIR/Bottles" && mv "$src" "$HOME_DIR/Bottles/$name" && ln -s "$HOME_DIR/Bottles/$name" "$src"
     echo "Bottle '$name' agora mora em ~/winmac/Bottles (o CrossOver ainda acha ele pelo atalho)." ;;
+  update)
+    self_update "$2" ;;
   restore)
     p="$(bottle_path "$2")"; cp "$HOME_DIR/backup/"{system,user,userdef}.reg "$p/" && echo "Registro restaurado." ;;
   *)
-    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,/^$/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//' ;;
 esac

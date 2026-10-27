@@ -85,7 +85,25 @@ final class Model: ObservableObject {
     @Published var status = ""
     @Published var installing = false
 
-    init() { selected = bottles.first; reload() }
+    init() { selected = bottles.first; reload(); autoUpdate() }
+
+    // Ao abrir: atualiza o comando winmac, as ferramentas e o próprio app pelo GitHub; se o app mudou, reabre
+    func autoUpdate() {
+        let appPath = Bundle.main.bundlePath
+        DispatchQueue.global(qos: .utility).async {
+            guard FileManager.default.fileExists(atPath: winmacScript) else { return }
+            let out = runWinmac(["update", appPath])
+            guard out.contains("APP_ATUALIZADO") else { return }
+            DispatchQueue.main.async {
+                self.status = "Nova versão do WinMac instalada. Reabrindo…"
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/bin/sh")
+                p.arguments = ["-c", "sleep 1; open \"$0\"", appPath]
+                try? p.run()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+            }
+        }
+    }
 
     var steamInstalled: Bool {
         guard let b = selected else { return false }

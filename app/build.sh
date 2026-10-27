@@ -38,12 +38,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleName</key><string>WinMac</string>
+<key>CFBundleShortVersionString</key><string>$(cat ../VERSION 2>/dev/null || echo 0)</string>
 <key>CFBundleDisplayName</key><string>WinMac</string>
 <key>CFBundleIdentifier</key><string>local.winmac.app</string>
 <key>CFBundleExecutable</key><string>WinMac</string>
 <key>CFBundleIconFile</key><string>WinMac</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
