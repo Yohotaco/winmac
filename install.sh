@@ -18,11 +18,21 @@ fi
 echo "==> Baixando o app"
 curl -fL# -o "$TMP/WinMac.zip" "$REPO/releases/latest/download/WinMac.zip"
 ditto -x -k "$TMP/WinMac.zip" "$TMP"
-rm -rf /Applications/WinMac.app
-mv "$TMP/WinMac.app" /Applications/
+# Sem permissão para /Applications (conta sem administrador ou app antigo de outro usuário):
+# instala em ~/Applications, que aparece no Launchpad do mesmo jeito
+DEST=/Applications
+if ! { rm -rf "$DEST/WinMac.app" && mv "$TMP/WinMac.app" "$DEST/"; } 2>/dev/null; then
+  DEST="$HOME/Applications"
+  mkdir -p "$DEST" && rm -rf "$DEST/WinMac.app" && mv "$TMP/WinMac.app" "$DEST/"
+fi
+echo "==> App instalado em $DEST/WinMac.app"
 
 echo "==> Baixando o comando winmac"
-mkdir -p "$HOME/winmac/Bottles" "$HOME/winmac/tools"
+mkdir -p "$HOME/winmac/Bottles" "$HOME/winmac/tools" 2>/dev/null && [ -w "$HOME/winmac" ] || {
+  echo "Sem permissão na pasta ~/winmac (talvez criada com sudo). Rode isto e depois o instalador de novo:"
+  echo "  sudo chown -R \"$USER\" \"$HOME/winmac\""
+  exit 1
+}
 curl -fsL -o "$HOME/winmac/winmac" "$RAW/winmac"
 chmod +x "$HOME/winmac/winmac"
 curl -fsL -o "$HOME/winmac/tools/steamwebhelper-wrap.exe" "$RAW/tools/steamwebhelper-wrap.exe"
@@ -30,4 +40,4 @@ curl -fsL -o "$HOME/winmac/tools/winmac-transparent.dylib" "$RAW/tools/winmac-tr
 curl -fsL -o "$HOME/winmac/tools/winmac-dxmt.dylib" "$RAW/tools/winmac-dxmt.dylib"
 
 echo "==> Pronto! Abrindo o WinMac. Clique em \"Instalar Steam\"."
-open /Applications/WinMac.app
+open "$DEST/WinMac.app"
