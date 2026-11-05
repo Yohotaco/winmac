@@ -12,9 +12,9 @@ trap 'rm -rf "$TMP"' EXIT
 echo "==> Instalando o WinMac"
 
 # O Wine roda em modo Intel; nos Macs com chip Apple ele precisa do Rosetta 2
-if [ "$(uname -m)" = "arm64" ] && ! pgrep -q oahd; then
+if [ "$(uname -m)" = "arm64" ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
   echo "==> Instalando o Rosetta 2 (pode pedir sua senha)"
-  softwareupdate --install-rosetta --agree-to-license
+  softwareupdate --install-rosetta --agree-to-license || echo "Rosetta não instalado agora; o WinMac tenta de novo ao abrir a Steam."
 fi
 
 echo "==> Baixando o app"

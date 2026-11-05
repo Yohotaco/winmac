@@ -14,8 +14,15 @@
 #   winmac restore [bottle]   restaura o registro original do CrossOver (backup)
 #   winmac update [app]       baixa a versão mais nova do comando, das ferramentas e do app (se passar o caminho)
 
-WINE="/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine"
-WINESERVER="/Applications/Wine Staging.app/Contents/Resources/wine/bin/wineserver"
+# O Wine fica em /Applications ou, sem permissão de gravar lá, em ~/Applications (WINMAC_APPS escolhe outra pasta)
+APP_DIRS=("/Applications" "$HOME/Applications")
+[ -n "$WINMAC_APPS" ] && APP_DIRS=("$WINMAC_APPS")
+use_wine_dir() {
+  WINE="$1/Wine Staging.app/Contents/Resources/wine/bin/wine"
+  WINESERVER="$1/Wine Staging.app/Contents/Resources/wine/bin/wineserver"
+}
+use_wine_dir "${APP_DIRS[0]}"
+for d in "${APP_DIRS[@]}"; do [ -x "$d/Wine Staging.app/Contents/Resources/wine/bin/wine" ] && { use_wine_dir "$d"; break; }; done
 HOME_DIR="$HOME/winmac"
 CX_BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
 DEFAULT_BOTTLE="Steam"
@@ -37,10 +44,13 @@ CX_DLLS=(system32/atidxx64.dll system32/nvapi64.dll system32/nvngx.dll system32/
          system32/winemetal.dll system32/wpcap.dll syswow64/winemetal.dll syswow64/wpcap.dll)
 set_aside_crossover_dlls() {
   local win="$1/drive_c/windows" dest="$HOME_DIR/crossover-dlls/$(basename "$1")" f
+  # Uma vez só por bottle: o DXMT instala depois um winemetal.dll e um nvapi64.dll com o mesmo nome
+  [ -f "$1/.winmac-cx-dlls" ] && return 0
   for f in "${CX_DLLS[@]}"; do
     [ -f "$win/$f" ] || continue
     mkdir -p "$dest/$(dirname "$f")" && mv "$win/$f" "$dest/$f"
   done
+  touch "$1/.winmac-cx-dlls"
 }
 
 setup_env() {
@@ -50,27 +60,65 @@ setup_env() {
   export MTL_HUD_ENABLED="${MTL_HUD_ENABLED:-0}"
   # Bottles do CrossOver usam o usuário Windows "crossover"; mantém o mesmo para os saves continuarem no lugar
   [ -d "$WINEPREFIX/drive_c/users/crossover" ] && export USER=crossover
-  [ -x "$WINE" ] || { echo "Wine Staging não encontrado em /Applications/Wine Staging.app"; exit 1; }
+  install_wine
   [ -d "$WINEPREFIX" ] || { echo "Bottle não encontrado: $WINEPREFIX"; exit 1; }
   set_aside_crossover_dlls "$WINEPREFIX"
   if pgrep -f "CrossOver.app/.*wineserver" >/dev/null; then
     echo "O CrossOver está rodando. Feche a Steam/CrossOver antes de usar o winmac no mesmo bottle."; exit 1
   fi
+  ensure_tools
   configure_bottle
+  install_dxmt
 }
 
 WINE_URL="https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-staging-11.18-osx64.tar.xz"
 DXVK_URL="https://github.com/Gcenx/DXVK-macOS/releases/download/v1.10.3-20230507-repack/dxvk-macOS-async-v1.10.3-20230507-repack.tar.gz"
 STEAM_SETUP_URL="https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe"
 
+# Os Macs com chip Apple precisam do Rosetta 2 para rodar o Wine (pede a senha numa janela, se precisar)
+ensure_rosetta() {
+  [ "$(uname -m)" = arm64 ] || return 0
+  arch -x86_64 /usr/bin/true 2>/dev/null && return 0
+  echo "Instalando o Rosetta 2..."
+  softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 ||
+    osascript -e 'do shell script "softwareupdate --install-rosetta --agree-to-license" with administrator privileges' >/dev/null 2>&1
+  arch -x86_64 /usr/bin/true 2>/dev/null || {
+    echo "Não consegui instalar o Rosetta 2. Rode no Terminal: softwareupdate --install-rosetta --agree-to-license"; exit 1; }
+}
+
 install_wine() {
+  ensure_rosetta
   [ -x "$WINE" ] && return 0
-  echo "Baixando o Wine Staging..."
-  local tmp; tmp=$(mktemp -d)
-  curl -fL# -o "$tmp/wine.tar.xz" "$WINE_URL" && tar -xJf "$tmp/wine.tar.xz" -C "$tmp" \
-    && mv "$tmp/Wine Staging.app" /Applications/ && xattr -dr com.apple.quarantine "/Applications/Wine Staging.app"
-  rm -rf "$tmp"
-  [ -x "$WINE" ] || { echo "Falha ao instalar o Wine."; exit 1; }
+  echo "Baixando o Wine Staging (só na primeira vez)..."
+  local tmp d; tmp=$(mktemp -d)
+  curl -fL# --retry 3 "$WINE_URL" | tar -xJf - -C "$tmp" || { echo "Falha ao baixar o Wine. Confira a internet e tente de novo."; exit 1; }
+  for d in "${APP_DIRS[@]}"; do
+    mkdir -p "$d" 2>/dev/null
+    if mv "$tmp/Wine Staging.app" "$d/" 2>/dev/null; then
+      xattr -dr com.apple.quarantine "$d/Wine Staging.app" 2>/dev/null
+      use_wine_dir "$d"
+      break
+    fi
+  done
+  rmdir "$tmp" 2>/dev/null
+  "$WINE" --version >/dev/null 2>&1 || { echo "Falha ao instalar o Wine."; exit 1; }
+}
+
+# Ferramentas do WinMac que faltarem vêm da última versão publicada
+latest_tag() {
+  curl -fsL --max-time 30 "https://api.github.com/repos/Yohotaco/winmac/releases/latest" |
+    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1
+}
+ensure_tools() {
+  local f tag tmp
+  for f in tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib; do
+    [ -f "$HOME_DIR/$f" ] && continue
+    [ -n "$tag" ] || tag=$(latest_tag)
+    [ -n "$tag" ] || return 0
+    mkdir -p "$HOME_DIR/tools"; tmp=$(mktemp)
+    curl -fsL --max-time 60 -o "$tmp" "https://raw.githubusercontent.com/Yohotaco/winmac/$tag/$f" &&
+      chmod 755 "$tmp" && mv "$tmp" "$HOME_DIR/$f"
+  done
 }
 
 # DXVK (DirectX 10/11 -> Vulkan/Metal): sem ele os jogos DX11 falham com "Failed to initialize graphics"
@@ -135,21 +183,27 @@ transparent_exes() {
 }
 
 # DXMT (DirectX 10/11 -> Metal, código aberto: github.com/3Shain/dxmt). Mais rápido que o DXVK porque não
-# passa pelo Vulkan/MoltenVK. Os arquivos ficam em ~/winmac/dxmt/<versão> e são copiados para o bottle a
-# cada abertura da Steam (o Wine às vezes apaga o winemetal.dll da pasta de sistema).
+# passa pelo Vulkan/MoltenVK. Os arquivos ficam em ~/winmac/dxmt/<versão> e são copiados para a pasta do Wine
+# e para o bottle sempre que faltam (também depois de o Wine recriar as DLLs do bottle).
 DXMT_URL="https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz"
+sync_dir() {  # copia só os arquivos que mudaram (um jogo pode estar usando as DLLs)
+  local f
+  for f in "$1"/*; do
+    cmp -s "$f" "$2/$(basename "$f")" || cp "$f" "$2/" || return 1
+  done
+}
 install_dxmt() {
-  local src win="$WINEPREFIX/drive_c/windows" d
+  local src win="$WINEPREFIX/drive_c/windows" lib="$(dirname "$WINE")/../lib/wine" d
   src=$(ls -d "$HOME_DIR"/dxmt/v* 2>/dev/null | sort -V | tail -1)
   if [ -z "$src" ]; then
     mkdir -p "$HOME_DIR/dxmt" && curl -fsL "$DXMT_URL" | tar -xz -C "$HOME_DIR/dxmt" || return 1
     src=$(ls -d "$HOME_DIR"/dxmt/v* | sort -V | tail -1)
   fi
-  [ -f "$DXMT_DYLIB" ] || return 1
-  # winemetal.so (parte macOS) tem que ficar ao lado das outras do Wine
-  cmp -s "$src/x86_64-unix/winemetal.so" "$(dirname "$WINE")/../lib/wine/x86_64-unix/winemetal.so" ||
-    cp "$src/x86_64-unix/winemetal.so" "$(dirname "$WINE")/../lib/wine/x86_64-unix/" || return 1
-  cp "$src"/x86_64-windows/*.dll "$win/system32/" && cp "$src"/i386-windows/*.dll "$win/syswow64/"
+  [ -f "$DXMT_DYLIB" ] && [ -d "$win/system32" ] || return 0
+  # Sem permissão na pasta do Wine: o bottle continua no DXVK
+  sync_dir "$src/x86_64-unix" "$lib/x86_64-unix" && sync_dir "$src/x86_64-windows" "$lib/x86_64-windows" &&
+    sync_dir "$src/i386-windows" "$lib/i386-windows" || return 1
+  sync_dir "$src/x86_64-windows" "$win/system32" && sync_dir "$src/i386-windows" "$win/syswow64"
   if [ ! -f "$WINEPREFIX/.winmac-dxmt" ]; then
     for d in d3d11 d3d10core dxgi winemetal; do
       "$WINE" reg add 'HKCU\Software\Wine\DllOverrides' /v $d /t REG_SZ /d native,builtin /f >/dev/null 2>&1
@@ -160,7 +214,6 @@ install_dxmt() {
 
 # Abre a Steam (com argumentos extras) já com o módulo de transparência
 launch_steam() {
-  install_dxmt
   # Sobras de uma sessão do Wine que travou (processos sem wineserver) impedem a Steam de abrir
   if ! pgrep -x wineserver >/dev/null && pgrep -f '^C:\\' >/dev/null; then
     pkill -9 -f '^C:\\'
@@ -296,8 +349,7 @@ play_d3dmetal() {
 REPO="Yohotaco/winmac"
 self_update() {
   local app="$1" tmp f latest cur
-  latest=$(curl -fsL --max-time 30 "https://api.github.com/repos/$REPO/releases/latest" |
-    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  latest=$(latest_tag)
   [ -n "$latest" ] || return 0
   tmp=$(mktemp -d) || return 1
   # Comando e ferramentas: troca só o que mudou (mv cria arquivo novo, então não atrapalha quem está usando)
@@ -357,6 +409,64 @@ import_crossover() {
 
 steam_apps() { echo "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamapps"; }
 
+# O instalador da Valve só traz o básico: o resto vem na primeira abertura. Com -noverifyfiles a Steam pode
+# pular esse download e fechar com "Failed to load steamui.dll", então a primeira abertura é sem a opção.
+steam_ready() { [ -f "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamui.dll" ]; }
+first_boot() {
+  local dir="$WINEPREFIX/drive_c/Program Files (x86)/Steam" try i now last idle limit
+  for try in 1 2 3 4 5; do
+    echo "Baixando os arquivos da Steam (tentativa $try de 5, só na primeira vez)..."
+    launch_steam
+    last=-1; idle=0
+    # Pronta quando já chegou a abrir o navegador interno, ou seja, terminou de extrair tudo.
+    # Às vezes o download dentro do Wine para sem dar erro: sem começar em 1 minuto (ou parado
+    # por 5 depois de começar, para não atrapalhar internet lenta), tenta de novo.
+    for i in $(seq 1 400); do
+      [ -f "$dir/steamui.dll" ] && [ -f "$dir/logs/webhelper.txt" ] && break
+      sleep 3
+      now=$(du -sk "$dir" 2>/dev/null | cut -f1)
+      if [ "$now" != "$last" ]; then
+        [ "$last" != -1 ] && echo "Baixando a Steam: $((now / 1024)) MB..."
+        last=$now; idle=0
+      else
+        idle=$((idle + 3))
+        limit=60; [ -n "$(ls -A "$dir/package" 2>/dev/null)" ] && limit=300
+        [ "$idle" -ge "$limit" ] && break
+      fi
+    done
+    "$WINESERVER" -k; "$WINESERVER" -w
+    [ -f "$dir/steamui.dll" ] && return 0
+  done
+  echo "A Steam não conseguiu baixar os arquivos. Se usa VPN (WARP, Windscribe), desligue e clique em Abrir Steam de novo."
+  exit 1
+}
+
+# Instala o Wine e a Steam oficial num bottle (ou traz a Steam do CrossOver, se houver)
+do_setup() {
+  local name="${1:-$DEFAULT_BOTTLE}"
+  install_wine
+  # Se já existe uma Steam no CrossOver, usa ela (com jogos, saves e login) em vez de instalar outra
+  if [ -n "$(cx_steam_bottles)" ] && ! steam_installed "$name"; then
+    import_crossover && { echo "Steam do CrossOver importada! Clique em Abrir Steam."; return 0; }
+  fi
+  if steam_installed "$name"; then echo "A Steam já está instalada no bottle '$name'."; return 0; fi
+  mkdir -p "$HOME_DIR/Bottles/$name"
+  setup_env "$name"
+  echo "Criando o bottle '$name'..."
+  "$WINE" wineboot --init >/dev/null 2>&1
+  "$WINESERVER" -w
+  echo "Baixando a Steam oficial da Valve..."
+  curl -fL# -o "$WINEPREFIX/drive_c/SteamSetup.exe" "$STEAM_SETUP_URL" || { echo "Falha ao baixar a Steam."; exit 1; }
+  echo "Instalando a Steam..."
+  "$WINE" 'C:\SteamSetup.exe' /S >/dev/null 2>&1
+  "$WINESERVER" -w
+  rm -f "$WINEPREFIX/drive_c/SteamSetup.exe"
+  configure_bottle
+  steam_installed "$name" || { echo "A instalação da Steam falhou."; exit 1; }
+  first_boot
+  echo "Steam instalada! Clique em Abrir Steam."
+}
+
 case "$1" in
   detect)
     cx_steam_bottles | while IFS= read -r b; do printf "%s\t%s\n" "$b" "$(count_games "$CX_BOTTLES/$b")"; done ;;
@@ -364,26 +474,7 @@ case "$1" in
     install_wine
     import_crossover && echo "Steam do CrossOver importada! Clique em Abrir Steam." ;;
   setup)
-    name="${2:-$DEFAULT_BOTTLE}"
-    install_wine
-    # Se já existe uma Steam no CrossOver, usa ela (com jogos, saves e login) em vez de instalar outra
-    if [ -n "$(cx_steam_bottles)" ] && ! steam_installed "$name"; then
-      import_crossover && { echo "Steam do CrossOver importada! Clique em Abrir Steam."; exit 0; }
-    fi
-    if steam_installed "$name"; then echo "A Steam já está instalada no bottle '$name'."; exit 0; fi
-    mkdir -p "$HOME_DIR/Bottles/$name"
-    setup_env "$name"
-    echo "Criando o bottle '$name'..."
-    "$WINE" wineboot --init >/dev/null 2>&1
-    "$WINESERVER" -w
-    echo "Baixando a Steam oficial da Valve..."
-    curl -fL# -o "$WINEPREFIX/drive_c/SteamSetup.exe" "$STEAM_SETUP_URL" || { echo "Falha ao baixar a Steam."; exit 1; }
-    echo "Instalando a Steam..."
-    "$WINE" 'C:\SteamSetup.exe' /S >/dev/null 2>&1
-    "$WINESERVER" -w
-    rm -f "$WINEPREFIX/drive_c/SteamSetup.exe"
-    configure_bottle
-    steam_installed "$name" && echo "Steam instalada! Clique em Abrir Steam." || { echo "A instalação da Steam falhou."; exit 1; } ;;
+    do_setup "$2" ;;
   list)
     for b in "$HOME_DIR/Bottles"/* "$CX_BOTTLES"/*; do
       [ -d "$b" ] && [ ! -L "$b" ] || continue
@@ -396,7 +487,9 @@ case "$1" in
       done
     done ;;
   steam)
+    steam_installed "$2" || do_setup "$2"
     setup_env "$2"
+    steam_ready "$2" || first_boot
     fix_webhelper
     BOTTLE="$2"; launch_steam; echo "Steam abrindo..." ;;
   play)
@@ -407,6 +500,7 @@ case "$1" in
       id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
+    steam_ready "$3" || first_boot
     BOTTLE="$3"
     play_d3dmetal "$id" && exit 0
     fix_webhelper

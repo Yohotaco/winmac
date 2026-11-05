@@ -134,10 +134,25 @@ final class Model: ObservableObject {
         installing = true
         status = "Preparando…"
         let name = selected?.id ?? "Steam"
+        stream(["setup", name]) {
+            self.installing = false
+            self.selected = nil
+            self.reload()
+            if self.selected == nil { self.selected = self.bottles.first { $0.id == name } }
+        }
+    }
+
+    func run(_ args: [String]) {
+        status = "Abrindo…"
+        stream(args) { self.reload() }
+    }
+
+    // Roda o winmac mostrando a última linha da saída (downloads podem levar minutos)
+    func stream(_ args: [String], done: @escaping () -> Void) {
         DispatchQueue.global().async {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/bash")
-            p.arguments = [winmacScript, "setup", name]
+            p.arguments = [winmacScript] + args
             let pipe = Pipe()
             p.standardOutput = pipe
             p.standardError = pipe
@@ -150,20 +165,7 @@ final class Model: ObservableObject {
             try? p.run()
             p.waitUntilExit()
             pipe.fileHandleForReading.readabilityHandler = nil
-            DispatchQueue.main.async {
-                self.installing = false
-                self.selected = nil
-                self.reload()
-                if self.selected == nil { self.selected = self.bottles.first { $0.id == name } }
-            }
-        }
-    }
-
-    func run(_ args: [String]) {
-        status = "Abrindo…"
-        DispatchQueue.global().async {
-            let out = runWinmac(args)
-            DispatchQueue.main.async { self.status = out }
+            DispatchQueue.main.async { done() }
         }
     }
 }
