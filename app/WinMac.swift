@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 let home = FileManager.default.homeDirectoryForCurrentUser.path
 let winmacScript = "\(home)/winmac/winmac"
@@ -14,6 +15,7 @@ struct Game: Identifiable {
     let id: String
     let name: String
     let cover: NSImage?
+    var path: String? = nil   // programas de fora da Steam: o .exe ou atalho
 }
 
 struct Bottle: Identifiable, Hashable {
@@ -64,6 +66,43 @@ func loadGames(_ bottle: Bottle) -> [Game] {
     }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 }
 
+// Programas de fora da Steam: os arrastados para o app e os atalhos criados por instaladores
+func programsFile(_ b: Bottle) -> String { "\(b.path)/.winmac-programs" }
+let ignoredShortcut = try! NSRegularExpression(pattern: "unins|desinstal|readme|leia-me|help|ajuda|manual|website|support|suporte|licen[sç]|updater|atualizador|error report|recovery|^steam$", options: .caseInsensitive)
+
+func loadPrograms(_ b: Bottle) -> [Game] {
+    if b.isMac { return [] }
+    let fm = FileManager.default
+    var hidden = Set<String>(), seen = Set<String>(), out: [Game] = []
+    let lines = ((try? String(contentsOfFile: programsFile(b), encoding: .utf8)) ?? "").split(separator: "\n")
+    for line in lines {
+        let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2 else { continue }
+        if parts[0].isEmpty { hidden.insert(parts[1]); continue }
+        if fm.fileExists(atPath: parts[1]) && seen.insert(parts[0]).inserted {
+            out.append(Game(id: parts[1], name: parts[0], cover: nil, path: parts[1]))
+        }
+    }
+    let c = "\(b.path)/drive_c"
+    var roots = ["\(c)/ProgramData/Microsoft/Windows/Start Menu", "\(c)/users/Public/Desktop"]
+    for u in (try? fm.contentsOfDirectory(atPath: "\(c)/users")) ?? [] {
+        roots.append("\(c)/users/\(u)/AppData/Roaming/Microsoft/Windows/Start Menu")
+    }
+    for root in roots {
+        guard let files = fm.enumerator(atPath: root) else { continue }
+        for case let f as String in files where f.lowercased().hasSuffix(".lnk") {
+            let name = ((f as NSString).lastPathComponent as NSString).deletingPathExtension
+            let range = NSRange(name.startIndex..., in: name)
+            if ignoredShortcut.firstMatch(in: name, range: range) != nil || hidden.contains(name) { continue }
+            if seen.insert(name).inserted {
+                let path = "\(root)/\(f)"
+                out.append(Game(id: path, name: name, cover: nil, path: path))
+            }
+        }
+    }
+    return out
+}
+
 @discardableResult
 func runWinmac(_ args: [String]) -> String {
     let p = Process()
@@ -84,23 +123,47 @@ final class Model: ObservableObject {
     @Published var games: [Game] = []
     @Published var status = ""
     @Published var installing = false
+    @Published var newVersion: String?
+    @Published var updateError: String?
+    private var lastUpdateCheck: Date?
 
-    init() { selected = bottles.first; reload(); autoUpdate() }
+    init() { selected = bottles.first; reload(); checkForUpdate() }
 
-    // Ao abrir: atualiza o comando winmac, as ferramentas e o próprio app pelo GitHub; se o app mudou, reabre
-    func autoUpdate() {
+    // Pergunta antes de atualizar. Confere ao abrir e, no máximo uma vez por hora, ao voltar para a janela.
+    func checkForUpdate() {
+        if let last = lastUpdateCheck, Date().timeIntervalSince(last) < 3600 { return }
+        lastUpdateCheck = Date()
+        guard let url = URL(string: "https://api.github.com/repos/Yohotaco/winmac/releases/latest") else { return }
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String else { return }
+            let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+            guard latest.compare(current, options: .numeric) == .orderedDescending else { return }
+            DispatchQueue.main.async { self.newVersion = latest }
+        }.resume()
+    }
+
+    func update() {
         let appPath = Bundle.main.bundlePath
-        DispatchQueue.global(qos: .utility).async {
-            guard FileManager.default.fileExists(atPath: winmacScript) else { return }
+        status = "Atualizando o WinMac…"
+        DispatchQueue.global(qos: .userInitiated).async {
             let out = runWinmac(["update", appPath])
-            guard out.contains("APP_ATUALIZADO") else { return }
             DispatchQueue.main.async {
-                self.status = "Nova versão do WinMac instalada. Reabrindo…"
+                guard out.contains("APP_ATUALIZADO") else {
+                    let reason = out.components(separatedBy: "\n").first { $0.hasPrefix("UPDATE_ERRO ") }
+                    self.status = ""
+                    self.updateError = reason.map { String($0.dropFirst(12)) } ?? "Baixe a versão nova pelo site."
+                    return
+                }
+                self.status = "Nova versão instalada. Reabrindo…"
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/bin/sh")
                 p.arguments = ["-c", "sleep 1; open \"$0\"", appPath]
                 try? p.run()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+                // exit em vez de terminate: um aviso aberto em outra janela faria o macOS recusar o fechamento
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { exit(0) }
             }
         }
     }
@@ -120,6 +183,7 @@ final class Model: ObservableObject {
 
     func play(_ g: Game) {
         guard let b = selected else { return }
+        if let path = g.path { run(["run", path, b.id]); return }
         if b.isMac { NSWorkspace.shared.open(URL(string: "steam://rungameid/\(g.id)")!); status = "Abrindo \(g.name)…"; return }
         run(["play", g.id, b.id])
     }
@@ -127,7 +191,27 @@ final class Model: ObservableObject {
     func reload() {
         bottles = loadBottles()
         if selected == nil { selected = bottles.first }
-        games = selected.map(loadGames) ?? []
+        games = (selected.map { loadGames($0) + loadPrograms($0) } ?? [])
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    // Arrastou uma pasta ou .exe para a janela. A Steam do Mac não roda Windows: usa um bottle de Windows.
+    func addDropped(_ url: URL) {
+        let b = (selected?.isMac == true ? bottles.first { !$0.isMac } : selected) ?? Bottle(id: "Steam")
+        selected = b
+        status = "Adicionando \(url.lastPathComponent)…"
+        stream(["add", url.path, b.id]) { self.reload() }
+    }
+
+    // Só tira da lista: os arquivos do programa continuam onde estão
+    func remove(_ g: Game) {
+        guard let b = selected, let path = g.path else { return }
+        let file = programsFile(b)
+        var lines = ((try? String(contentsOfFile: file, encoding: .utf8)) ?? "")
+            .split(separator: "\n").map(String.init).filter { !$0.hasSuffix("\t\(path)") }
+        if path.lowercased().hasSuffix(".lnk") { lines.append("\t\(g.name)") }
+        try? (lines.joined(separator: "\n") + "\n").write(toFile: file, atomically: true, encoding: .utf8)
+        reload()
     }
 
     func installSteam() {
@@ -173,6 +257,7 @@ final class Model: ObservableObject {
 struct GameCard: View {
     let game: Game
     let action: () -> Void
+    var remove: () -> Void = {}
     @State private var hover = false
 
     var body: some View {
@@ -199,6 +284,12 @@ struct GameCard: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help("Jogar \(game.name)")
+        .contextMenu {
+            if let path = game.path {
+                Button("Mostrar no Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+                Button("Remover da lista", action: remove)
+            }
+        }
     }
 }
 
@@ -219,6 +310,7 @@ struct InstallView: View {
                 }
                 .controlSize(.large).buttonStyle(.borderedProminent)
             }
+            Text("Ou arraste para esta janela uma pasta ou um .exe de fora da Steam.").font(.callout).foregroundStyle(.secondary)
             Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
         }
         .padding(40)
@@ -227,8 +319,30 @@ struct InstallView: View {
     }
 }
 
+// Soltar pasta ou .exe na janela: acende a moldura e mostra o "+" no cursor
+struct FileDrop: DropDelegate {
+    @Binding var active: Bool
+    let onFile: (URL) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.fileURL]) }
+    func dropEntered(info: DropInfo) { active = true }
+    func dropExited(info: DropInfo) { active = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+    func performDrop(info: DropInfo) -> Bool {
+        active = false
+        let providers = info.itemProviders(for: [.fileURL])
+        for p in providers {
+            _ = p.loadObject(ofClass: URL.self) { url, _ in
+                if let url { DispatchQueue.main.async { onFile(url) } }
+            }
+        }
+        return !providers.isEmpty
+    }
+}
+
 struct ContentView: View {
     @StateObject var model = Model()
+    @State private var dropping = false
 
     var body: some View {
         NavigationSplitView {
@@ -238,15 +352,22 @@ struct ContentView: View {
             .navigationTitle("Bottles")
             .onChange(of: model.selected) { _, _ in model.reload() }
         } detail: {
-            if !model.steamInstalled {
+            if !model.steamInstalled && model.games.isEmpty {
                 InstallView(model: model)
             } else {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
-                    Button { model.openSteam() } label: {
-                        Label("Abrir Steam", systemImage: "play.fill").padding(.horizontal, 8)
+                    if model.steamInstalled {
+                        Button { model.openSteam() } label: {
+                            Label("Abrir Steam", systemImage: "play.fill").padding(.horizontal, 8)
+                        }
+                        .controlSize(.large).buttonStyle(.borderedProminent)
+                    } else {
+                        Button { model.installSteam() } label: {
+                            Label("Instalar Steam", systemImage: "arrow.down.circle.fill").padding(.horizontal, 8)
+                        }
+                        .controlSize(.large).disabled(model.installing)
                     }
-                    .controlSize(.large).buttonStyle(.borderedProminent)
                     if model.selected?.isMac != true {
                         Button { model.run(["kill", model.selected?.id ?? "Steam"]) } label: {
                             Label("Fechar tudo", systemImage: "stop.fill")
@@ -262,20 +383,46 @@ struct ContentView: View {
                 Divider()
                 ScrollView {
                     if model.games.isEmpty {
-                        Text("Nenhum jogo instalado neste bottle.").foregroundStyle(.secondary).padding(40)
+                        Text("Nenhum jogo instalado neste bottle.").foregroundStyle(.secondary).padding(.top, 40)
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 20)], spacing: 24) {
                         ForEach(model.games) { g in
-                            GameCard(game: g) { model.play(g) }
+                            GameCard(game: g, action: { model.play(g) }, remove: { model.remove(g) })
                         }
                     }
                     .padding(20)
+                    Text("Arraste para esta janela uma pasta ou um .exe para adicionar um programa.")
+                        .font(.callout).foregroundStyle(.secondary).padding(.bottom, 20)
                 }
             }
             .navigationTitle(model.selected?.id ?? "WinMac")
             }
         }
         .frame(minWidth: 820, minHeight: 560)
+        .overlay {
+            if dropping {
+                RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor, lineWidth: 4)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay { Label("Solte para abrir no WinMac", systemImage: "arrow.down.app.fill").font(.title2.bold()) }
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], delegate: FileDrop(active: $dropping) { model.addDropped($0) })
+        // Instaladores criam os atalhos fora do app: atualiza a lista ao voltar para a janela
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.reload(); model.checkForUpdate() }
+        .alert("Quer atualizar o WinMac?", isPresented: Binding(get: { model.newVersion != nil }, set: { if !$0 { model.newVersion = nil } })) {
+            Button("Atualizar") { model.update() }
+            Button("Agora não", role: .cancel) {}
+        } message: {
+            Text("A versão \(model.newVersion ?? "") já está disponível.")
+        }
+        .alert("Não consegui atualizar", isPresented: Binding(get: { model.updateError != nil }, set: { if !$0 { model.updateError = nil } })) {
+            Button("Baixar pelo site") { NSWorkspace.shared.open(URL(string: "https://github.com/Yohotaco/winmac/releases/latest")!) }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.updateError ?? "")
+        }
     }
 }
 

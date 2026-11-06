@@ -7,6 +7,7 @@
 #   winmac play <appid|nome>  abre um jogo (com o D3DMetal da Apple, se o Game Porting Toolkit estiver instalado)
 #   winmac d3dmetal <appid> on|off   liga/desliga o D3DMetal num jogo
 #   winmac run <exe> [bottle] roda qualquer .exe
+#   winmac add <pasta|exe> [bottle] adiciona um programa à lista do app e abre
 #   winmac detect             lista bottles do CrossOver que têm Steam (nome<TAB>nº de jogos)
 #   winmac import             traz para o WinMac todos os bottles do CrossOver que têm Steam (jogos, saves, login)
 #   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
@@ -213,7 +214,7 @@ install_dxmt() {
 }
 
 # Abre a Steam (com argumentos extras) já com o módulo de transparência
-launch_steam() {
+prepare_launch() {
   # Sobras de uma sessão do Wine que travou (processos sem wineserver) impedem a Steam de abrir
   if ! pgrep -x wineserver >/dev/null && pgrep -f '^C:\\' >/dev/null; then
     pkill -9 -f '^C:\\'
@@ -227,9 +228,126 @@ launch_steam() {
     inject="${inject:+$inject:}$TRANSPARENT_DYLIB"
   fi
   [ -n "$inject" ] && export DYLD_INSERT_LIBRARIES="$inject"
+}
+
+launch_steam() {
+  prepare_launch
   # Sem nohup: ele é um programa protegido do macOS e apagaria o DYLD_INSERT_LIBRARIES
   "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" "$@" >/dev/null 2>&1 &
   disown
+}
+
+# ---------- Programas de fora da Steam ----------
+# A lista do app fica em <bottle>/.winmac-programs (nome<TAB>caminho). Atalhos criados por instaladores
+# no Menu Iniciar o próprio app encontra.
+NOT_MAIN='unins|setup|instal|redist|vc_|dxweb|directx|dotnet|ndp[0-9]|crash|report|helper|update|patch|prereq|easyanticheat|battleye|config|autorun'
+is_installer() { basename "$1" | grep -qiE 'setup|instal|\.msi$'; }
+
+# Escolhe o .exe principal da pasta: nome parecido com o da pasta, depois o mais raso, depois o maior
+pick_exe() {
+  local folder base key rel depth size match f
+  folder=$(basename "$1" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')
+  find "$1" -type f -iname '*.exe' -print0 | while IFS= read -r -d '' f; do
+    base=$(basename "$f")
+    printf '%s' "$base" | grep -qiE "$NOT_MAIN" && continue
+    key=$(printf '%s' "${base%.*}" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')
+    match=1
+    if [ -n "$key" ] && [ -n "$folder" ]; then
+      case "$folder" in *"$key"*) match=0 ;; esac
+      case "$key" in *"$folder"*) match=0 ;; esac
+    fi
+    rel="${f#"$1"/}"
+    depth=$(printf '%s' "$rel" | tr -cd '/' | wc -c | tr -d ' ')
+    size=$(stat -f %z "$f")
+    printf '%s\t%s\t%s\t%s\n' "$match" "$depth" "$((999999999999 - size))" "$f"
+  done | sort -t "$(printf '\t')" -k1,1n -k2,2n -k3,3n | head -1 | cut -f4
+}
+
+register_program() {
+  local list="$WINEPREFIX/.winmac-programs"
+  grep -qF "$(printf '\t%s' "$2")" "$list" 2>/dev/null || printf '%s\t%s\n' "$1" "$2" >> "$list"
+}
+
+# Abre um programa na pasta dele. Com "wait", só volta quando ele fechar (instaladores).
+run_program() {
+  local file ext cmd
+  file=$(basename "$1"); ext=$(printf '%s' "${1##*.}" | tr 'A-Z' 'a-z')
+  prepare_launch
+  cd "$(dirname "$1")" || { echo "Não encontrei a pasta de $file."; exit 1; }
+  case "$ext" in
+    msi) cmd=("$WINE" msiexec /i "$file") ;;
+    bat|cmd) cmd=("$WINE" cmd /c "$file") ;;
+    lnk) cmd=("$WINE" start /unix "$1") ;;
+    *) cmd=("$WINE" "$1") ;;
+  esac
+  if [ "$2" = wait ]; then
+    "${cmd[@]}" >/dev/null 2>&1
+  else
+    "${cmd[@]}" >/dev/null 2>&1 &
+    disown
+  fi
+}
+
+run_installer() {
+  echo "Instalador aberto: siga os passos na janela dele."
+  run_program "$1" wait
+  echo "Instalador fechado. O programa instalado aparece aqui se ele criou um atalho."
+}
+
+# Arrastar para o app: pasta (copia para o C: e abre o .exe principal), .exe solto (abre onde está)
+# ou instalador (abre e o programa instalado aparece sozinho). Nunca sobrescreve uma pasta existente.
+add_program() {
+  local src="${1%/}" bottle="${2:-$DEFAULT_BOTTLE}" ext main inst name dest n=2
+  [ -e "$src" ] || { echo "Não encontrei: $src"; exit 1; }
+  if [ -f "$src" ]; then
+    ext=$(printf '%s' "${src##*.}" | tr 'A-Z' 'a-z')
+    case "$ext" in
+      exe|msi|bat|cmd) ;;
+      *) echo "O WinMac abre pastas e arquivos .exe, .msi ou .bat. Se estiver em .zip ou .rar, descompacte antes."; exit 1 ;;
+    esac
+  fi
+  [ -d "$(bottle_path "$bottle")" ] || mkdir -p "$HOME_DIR/Bottles/$bottle"
+  setup_env "$bottle"
+  BOTTLE="$bottle"
+  if [ ! -f "$WINEPREFIX/system.reg" ]; then
+    echo "Preparando o Windows (só na primeira vez)..."
+    "$WINE" wineboot --init >/dev/null 2>&1
+    "$WINESERVER" -w
+    configure_bottle
+    install_dxmt
+  fi
+  if [ -f "$src" ]; then
+    if is_installer "$src"; then run_installer "$src"; return; fi
+    name=$(basename "$src"); name="${name%.*}"
+    register_program "$name" "$src"
+    echo "Abrindo $name..."
+    run_program "$src"
+    return
+  fi
+  main=$(pick_exe "$src")
+  if [ -z "$main" ]; then
+    inst=$(find "$src" -type f \( -iname '*setup*.exe' -o -iname '*instal*.exe' -o -iname '*.msi' \) ! -iname 'unins*' | awk '{ print length, $0 }' | sort -n | head -1 | cut -d' ' -f2-)
+    [ -n "$inst" ] || { echo "Não achei nenhum programa do Windows nessa pasta."; exit 1; }
+    run_installer "$inst"
+    return
+  fi
+  name=$(basename "$src")
+  case "$src" in
+    "$WINEPREFIX"/*) dest="$src" ;;
+    *)
+      dest="$WINEPREFIX/drive_c/Games/$name"
+      while [ -e "$dest" ]; do dest="$WINEPREFIX/drive_c/Games/$name $n"; n=$((n + 1)); done
+      mkdir -p "$WINEPREFIX/drive_c/Games"
+      echo "Copiando $name para o WinMac..."
+      # -c: no mesmo disco não ocupa espaço dobrado
+      cp -cR "$src" "$dest" 2>/dev/null || ditto "$src" "$dest" || { echo "Não deu para copiar $name. Confira o espaço livre no disco."; exit 1; }
+      main="$dest/${main#"$src"/}"
+      name=$(basename "$dest")
+      ;;
+  esac
+  register_program "$name" "$main"
+  echo "Abrindo $name..."
+  run_program "$main"
 }
 
 # ---------- D3DMetal (Game Porting Toolkit da Apple) ----------
@@ -350,11 +468,16 @@ REPO="Yohotaco/winmac"
 self_update() {
   local app="$1" tmp f latest cur
   latest=$(latest_tag)
-  [ -n "$latest" ] || return 0
-  tmp=$(mktemp -d) || return 1
+  [ -n "$latest" ] || { echo "UPDATE_ERRO Não consegui falar com o GitHub. Confira a internet e tente de novo."; return 1; }
+  tmp=$(mktemp -d) || { echo "UPDATE_ERRO Não consegui criar uma pasta temporária. Confira o espaço livre no disco."; return 1; }
   # Comando e ferramentas: troca só o que mudou (mv cria arquivo novo, então não atrapalha quem está usando)
   for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib; do
-    curl -fsL --max-time 60 -o "$tmp/new" "https://raw.githubusercontent.com/$REPO/$latest/$f" && [ -s "$tmp/new" ] || continue
+    if ! curl -fsL --max-time 60 -o "$tmp/new" "https://raw.githubusercontent.com/$REPO/$latest/$f" || [ ! -s "$tmp/new" ]; then
+      [ "$f" = winmac ] || continue
+      echo "UPDATE_ERRO Não consegui baixar a nova versão. Confira a internet e tente de novo."
+      rm -rf "$tmp"
+      return 1
+    fi
     cmp -s "$tmp/new" "$HOME_DIR/$f" && continue
     mkdir -p "$(dirname "$HOME_DIR/$f")" && chmod +x "$tmp/new" && mv "$tmp/new" "$HOME_DIR/$f" && echo "Atualizado: $f"
   done
@@ -362,9 +485,18 @@ self_update() {
   if [ -n "$app" ] && [ -d "$app/Contents" ]; then
     cur=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null || echo 0)
     if [ "${latest#v}" != "$cur" ] && [ "$(printf '%s\n%s\n' "$cur" "${latest#v}" | sort -V | tail -1)" = "${latest#v}" ]; then
-      curl -fsL --max-time 300 -o "$tmp/app.zip" "https://github.com/$REPO/releases/download/$latest/WinMac.zip" &&
-        ditto -x -k "$tmp/app.zip" "$tmp/app" && [ -x "$tmp/app/WinMac.app/Contents/MacOS/WinMac" ] &&
-        rm -rf "$app" && mv "$tmp/app/WinMac.app" "$app" && echo "APP_ATUALIZADO ${latest#v}"
+      if ! curl -fsL --max-time 300 -o "$tmp/app.zip" "https://github.com/$REPO/releases/download/$latest/WinMac.zip" ||
+         ! ditto -x -k "$tmp/app.zip" "$tmp/app" || [ ! -x "$tmp/app/WinMac.app/Contents/MacOS/WinMac" ]; then
+        echo "UPDATE_ERRO Não consegui baixar a nova versão. Confira a internet e tente de novo."
+      # Tira o app velho de lado antes de pôr o novo: se algo falhar, ele volta para o lugar
+      elif ! mv "$app" "$tmp/old" 2>/dev/null; then
+        echo "UPDATE_ERRO Sem permissão para trocar o WinMac em $app. Apague esse app e baixe a versão nova pelo site."
+      elif mv "$tmp/app/WinMac.app" "$app"; then
+        echo "APP_ATUALIZADO ${latest#v}"
+      else
+        mv "$tmp/old" "$app"
+        echo "UPDATE_ERRO Não consegui colocar a versão nova em $app. Baixe a versão nova pelo site."
+      fi
     fi
   fi
   rm -rf "$tmp"
@@ -508,9 +640,13 @@ case "$1" in
   d3dmetal)
     [[ "$2" =~ ^[0-9]+$ ]] && [[ "$3" =~ ^(on|off)$ ]] || { echo "Uso: winmac d3dmetal <appid> on|off"; exit 1; }
     set_d3dmetal "$2" "$3"; echo "D3DMetal $3 para o jogo $2." ;;
+  add)
+    add_program "$2" "$3" ;;
   run)
     setup_env "$3"
-    nohup "$WINE" "$2" >/dev/null 2>&1 & ;;
+    BOTTLE="${3:-$DEFAULT_BOTTLE}"
+    run_program "$2"
+    echo "Abrindo $(basename "$2")..." ;;
   kill)
     export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; echo "Bottle fechado." ;;
   migrate)
