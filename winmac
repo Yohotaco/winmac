@@ -268,10 +268,19 @@ register_program() {
   grep -qF "$(printf '\t%s' "$2")" "$list" 2>/dev/null || printf '%s\t%s\n' "$1" "$2" >> "$list"
 }
 
+# Programas WPF (ex.: Bloxstrap) saem com a janela preta, só com os botões, porque o WPF desenha pela GPU.
+# Pede desenho por software, uma vez por bottle.
+fix_wpf() {
+  [ -f "$WINEPREFIX/.winmac-wpf" ] || [ ! -f "$WINEPREFIX/system.reg" ] && return 0
+  "$WINE" reg add 'HKCU\Software\Microsoft\Avalon.Graphics' /v DisableHWAcceleration /t REG_DWORD /d 1 /f >/dev/null 2>&1 &&
+    touch "$WINEPREFIX/.winmac-wpf"
+}
+
 # Abre um programa na pasta dele. Com "wait", só volta quando ele fechar (instaladores).
 run_program() {
   local file ext cmd
   file=$(basename "$1"); ext=$(printf '%s' "${1##*.}" | tr 'A-Z' 'a-z')
+  fix_wpf
   prepare_launch
   cd "$(dirname "$1")" || { echo "Não encontrei a pasta de $file."; exit 1; }
   case "$ext" in
@@ -543,10 +552,20 @@ steam_apps() { echo "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steam
 
 # O instalador da Valve só traz o básico: o resto vem na primeira abertura. Com -noverifyfiles a Steam pode
 # pular esse download e fechar com "Failed to load steamui.dll", então a primeira abertura é sem a opção.
-steam_ready() { [ -f "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/steamui.dll" ]; }
+# Pronta = steamui.dll inteiro (arquivo cortado ou ausente dá "Failed to load steamui.dll")
+steam_files_ok() {
+  [ "$(stat -f%z "$1/steamui.dll" 2>/dev/null || echo 0)" -gt 1000000 ]
+}
+steam_ready() { steam_files_ok "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam"; }
 first_boot() {
-  local dir="$WINEPREFIX/drive_c/Program Files (x86)/Steam" try i now last idle limit
+  local dir="$WINEPREFIX/drive_c/Program Files (x86)/Steam" try i now last idle limit m saved=("${STEAM_ARGS[@]}")
+  # Instalação incompleta (ex.: download cortado): tira o marcador de "instalado" para a Steam conferir tudo e baixar o que falta
+  for m in "$dir/package/steam_client_win32.installed" "$dir/package/steam_client_win64.installed"; do
+    [ -f "$m" ] && mv -f "$m" "$m.incompleto"
+  done
   for try in 1 2 3 4 5; do
+    # Da segunda tentativa em diante, sem -noverifyfiles: a Steam confere os arquivos e baixa os que faltam
+    [ "$try" -ge 2 ] && STEAM_ARGS=()
     echo "Baixando os arquivos da Steam (tentativa $try de 5, só na primeira vez)..."
     launch_steam
     last=-1; idle=0
@@ -554,9 +573,9 @@ first_boot() {
     # Às vezes o download dentro do Wine para sem dar erro: sem começar em 1 minuto (ou parado
     # por 5 depois de começar, para não atrapalhar internet lenta), tenta de novo.
     for i in $(seq 1 400); do
-      [ -f "$dir/steamui.dll" ] && [ -f "$dir/logs/webhelper.txt" ] && break
+      steam_files_ok "$dir" && [ -f "$dir/logs/webhelper.txt" ] && break
       sleep 3
-      now=$(du -sk "$dir" 2>/dev/null | cut -f1)
+      now=$(du -sk "$dir/package" "$dir/steamui.dll" 2>/dev/null | awk '{s+=$1} END {print s+0}')
       if [ "$now" != "$last" ]; then
         [ "$last" != -1 ] && echo "Baixando a Steam: $((now / 1024)) MB..."
         last=$now; idle=0
@@ -567,7 +586,14 @@ first_boot() {
       fi
     done
     "$WINESERVER" -k; "$WINESERVER" -w
-    [ -f "$dir/steamui.dll" ] && return 0
+    if steam_files_ok "$dir"; then
+      # Devolve o marcador se a Steam não recriou (arquivos conferidos, nada a baixar)
+      for m in "$dir"/package/*.installed.incompleto; do
+        [ -f "$m" ] || continue
+        [ -f "${m%.incompleto}" ] && rm -f "$m" || mv -f "$m" "${m%.incompleto}"
+      done
+      STEAM_ARGS=("${saved[@]}"); return 0
+    fi
   done
   echo "A Steam não conseguiu baixar os arquivos. Se usa VPN (WARP, Windscribe), desligue e clique em Abrir Steam de novo."
   exit 1
