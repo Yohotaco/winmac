@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#include <crt_externs.h>
 
 struct macdrv_win_data { void *hwnd, *cocoa_window, *cocoa_view, *client_cocoa_view; };
 
@@ -31,6 +32,39 @@ static NSView *client_view(NSWindow *w) {
     return best;
 }
 
+// Papel de parede animado (Wallpaper Engine): ele desenha numa janela filha da "WorkerW" da área de
+// trabalho, que pertence a outro processo (winmac-progman.exe). Sem janela Cocoa aqui, este processo ganha
+// a sua própria, do tamanho da tela, no nível do papel de parede do macOS: atrás de tudo e dos ícones.
+static BOOL is_wallpaper_process(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        cached = 0;
+        char **argv = *_NSGetArgv();
+        for (int i = 0; i < *_NSGetArgc(); i++)
+            if (argv[i] && (strcasestr(argv[i], "wallpaper64.exe") || strcasestr(argv[i], "wallpaper32.exe"))) cached = 1;
+    }
+    return cached;
+}
+
+static NSWindow *wallpaper_window(void) {
+    static NSWindow *win;
+    if (win) return win;
+    NSScreen *screen = NSScreen.screens.firstObject;
+    win = [[NSWindow alloc] initWithContentRect:screen.frame styleMask:NSWindowStyleMaskBorderless
+                                        backing:NSBackingStoreBuffered defer:NO];
+    win.releasedWhenClosed = NO;
+    win.level = CGWindowLevelForKey(kCGDesktopWindowLevelKey) + 2;   // acima da foto, abaixo dos ícones
+    win.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary |
+                             NSWindowCollectionBehaviorIgnoresCycle;
+    win.ignoresMouseEvents = YES;
+    win.hasShadow = NO;
+    win.backgroundColor = NSColor.blackColor;
+    win.title = @"WinMac Wallpaper Engine";
+    win.contentView.wantsLayer = YES;
+    [win orderFrontRegardless];
+    return win;
+}
+
 static struct macdrv_win_data *get_win_data(void *hwnd) {
     struct macdrv_win_data *d = calloc(1, sizeof(*d));
     d->hwnd = hwnd;
@@ -40,6 +74,7 @@ static struct macdrv_win_data *get_win_data(void *hwnd) {
             if (window_hwnd(w) == hwnd) { found = w; break; }
             if (w.visible && (!largest || area(w.contentView) > area(largest.contentView))) largest = w;
         }
+        if (!found && is_wallpaper_process()) found = wallpaper_window();
         if (!found) found = largest;   // janela filha: usa a janela principal do jogo
         if (found) {
             d->cocoa_window = (__bridge void *)found;

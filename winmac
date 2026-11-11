@@ -112,7 +112,7 @@ latest_tag() {
 }
 ensure_tools() {
   local f tag tmp
-  for f in tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib; do
+  for f in tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe; do
     [ -f "$HOME_DIR/$f" ] && continue
     [ -n "$tag" ] || tag=$(latest_tag)
     [ -n "$tag" ] || return 0
@@ -228,6 +228,29 @@ prepare_launch() {
     inject="${inject:+$inject:}$TRANSPARENT_DYLIB"
   fi
   [ -n "$inject" ] && export DYLD_INSERT_LIBRARIES="$inject"
+  fix_wallpaper_engine
+}
+
+# Wallpaper Engine:
+#  1. a interface (um Chromium) fica preta com a GPU sob o Wine: o wallpaperui.exe ganha o mesmo embrulho do
+#     steamwebhelper, que liga o Chromium sem GPU;
+#  2. o motor espera a área de trabalho do Windows (janela "Progman") e o Wine do Mac não tem uma: o
+#     winmac-progman.exe cria essa área, invisível, e o winmac-dxmt.dylib mostra o papel de parede numa
+#     janela no nível do papel de parede do macOS (atrás de todas as janelas).
+PROGMAN_EXE="$HOME_DIR/tools/winmac-progman.exe"
+fix_wallpaper_engine() {
+  local dir="$(steam_apps "$BOTTLE")/common/wallpaper_engine/bin"
+  [ -d "$dir" ] || return 0
+  if [ -f "$dir/wallpaperui.exe" ] && [ -f "$WRAP_EXE" ] && ! cmp -s "$WRAP_EXE" "$dir/wallpaperui.exe"; then
+    # Só guarda como _real o original (vários MB), nunca uma versão antiga do embrulho
+    [ "$(stat -f%z "$dir/wallpaperui.exe")" -gt 1000000 ] && mv -f "$dir/wallpaperui.exe" "$dir/wallpaperui_real.exe"
+    cp "$WRAP_EXE" "$dir/wallpaperui.exe"
+  fi
+  [ -f "$dir/wallpaperui_real.exe" ] && echo "$WEBHELPER_FLAGS" > "$dir/winmac_flags.txt"
+  if [ -f "$PROGMAN_EXE" ] && ! pgrep -f winmac-progman.exe >/dev/null; then
+    "$WINE" "Z:$PROGMAN_EXE" >/dev/null 2>&1 &
+    disown
+  fi
 }
 
 launch_steam() {
@@ -480,7 +503,7 @@ self_update() {
   [ -n "$latest" ] || { echo "UPDATE_ERRO Não consegui falar com o GitHub. Confira a internet e tente de novo."; return 1; }
   tmp=$(mktemp -d) || { echo "UPDATE_ERRO Não consegui criar uma pasta temporária. Confira o espaço livre no disco."; return 1; }
   # Comando e ferramentas: troca só o que mudou (mv cria arquivo novo, então não atrapalha quem está usando)
-  for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib; do
+  for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe; do
     if ! curl -fsL --max-time 60 -o "$tmp/new" "https://raw.githubusercontent.com/$REPO/$latest/$f" || [ ! -s "$tmp/new" ]; then
       [ "$f" = winmac ] || continue
       echo "UPDATE_ERRO Não consegui baixar a nova versão. Confira a internet e tente de novo."

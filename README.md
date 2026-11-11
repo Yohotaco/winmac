@@ -48,7 +48,7 @@ Os jogos abertos pela Steam usam o [DXMT](https://github.com/3Shain/dxmt) (códi
 
 O DXMT precisa que o Wine exporte umas funções do driver de janelas do Mac (`macdrv_functions`), coisa que só o Wine do CrossOver faz. O WinMac fornece essas funções com o módulo [`tools/dxmt_shim.m`](tools/dxmt_shim.m), carregado nos processos do Wine junto com a Steam. Ele usa as classes do próprio Wine (`WineWindow`, `WineContentView`, `WineMetalView`) para criar a camada Metal na janela do jogo.
 
-Para recompilar: `clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -framework Foundation -framework QuartzCore -framework Metal -Wl,-undefined,dynamic_lookup -o tools/winmac-dxmt.dylib tools/dxmt_shim.m && codesign -s - -f tools/winmac-dxmt.dylib`
+Para recompilar: `clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -framework Foundation -framework AppKit -framework QuartzCore -framework Metal -Wl,-undefined,dynamic_lookup -o tools/winmac-dxmt.dylib tools/dxmt_shim.m && codesign -s - -f tools/winmac-dxmt.dylib`
 
 ## Steam do Mac e Steam do CrossOver
 
@@ -102,6 +102,17 @@ O WinMac resolve com [`tools/transparent.m`](tools/transparent.m), um módulo do
 O `winmac` detecta os jogos Unity que usam `DwmExtendFrameIntoClientArea` e só ativa o módulo neles. Se a Steam já estava aberta antes de instalar um jogo desses, feche e abra a Steam pelo WinMac de novo.
 
 Para recompilar o módulo: `clang -arch x86_64 -dynamiclib -fobjc-arc -framework Foundation -framework QuartzCore -framework Metal -o tools/winmac-transparent.dylib tools/transparent.m && codesign -s - -f tools/winmac-transparent.dylib`
+
+## Wallpaper Engine como papel de parede do Mac
+
+O Wallpaper Engine tinha dois problemas no Wine:
+
+- **Interface preta:** a interface é um Chromium cujo processo de GPU cai em loop. O `wallpaperui.exe` ganha o mesmo embrulho do `steamwebhelper`, que liga o Chromium sem GPU.
+- **Papel de parede não aplicava:** o motor procura a área de trabalho do Windows (a janela `Progman`, depois uma `WorkerW` com os ícones e outra `WorkerW` atrás dela) e espera para sempre, porque o Wine do Mac não cria nenhuma. O [`tools/progman.c`](tools/progman.c) (`winmac-progman.exe`) cria essas janelas, invisíveis. Como a janela do papel de parede fica em outro processo, o `winmac-dxmt.dylib` dá ao processo do Wallpaper Engine uma janela do tamanho da tela no nível do papel de parede do macOS: atrás de todas as janelas e abaixo dos ícones da mesa, em todos os Spaces e sem pegar cliques.
+
+O `winmac` aplica as duas coisas sozinho sempre que abre a Steam num bottle com o Wallpaper Engine.
+
+Para recompilar o auxiliar (precisa do `mingw-w64`, `brew install mingw-w64`): `x86_64-w64-mingw32-gcc -O2 -municode -mwindows -static -o tools/winmac-progman.exe tools/progman.c`
 
 ## Licença
 
