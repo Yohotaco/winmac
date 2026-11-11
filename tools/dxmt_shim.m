@@ -9,6 +9,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #include <crt_externs.h>
+#include <spawn.h>
 
 struct macdrv_win_data { void *hwnd, *cocoa_window, *cocoa_view, *client_cocoa_view; };
 
@@ -46,23 +47,127 @@ static BOOL is_wallpaper_process(void) {
     return cached;
 }
 
+// A barra de menus do macOS 26 tira a cor do véu da foto de fundo (não do que está desenhado em cima dela).
+// Com uma foto clara ela fica com uma faixa branca por cima do papel de parede animado. Por isso, enquanto o
+// Wallpaper Engine roda, a foto de fundo vira a prévia do papel de parede escolhido; ao fechar, volta a original.
+static NSString *winmac_dir(void) { return [NSHomeDirectory() stringByAppendingPathComponent:@"winmac"]; }
+static NSString *original_file(void) { return [winmac_dir() stringByAppendingPathComponent:@"wallpaper-original.txt"]; }
+
+static void set_desktop_picture(NSURL *url) {
+    for (NSScreen *s in NSScreen.screens)
+        [[NSWorkspace sharedWorkspace] setDesktopImageURL:url forScreen:s options:@{} error:nil];
+}
+
+// A foto de fundo é por Space: num app em tela cheia a troca não vale para a mesa. O Dock mostra a
+// "Fullscreen Backdrop" (um nível acima do papel de parede) só nos Spaces de tela cheia.
+static BOOL on_fullscreen_space(void) {
+    BOOL full = NO;
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+    for (NSDictionary *w in (__bridge NSArray *)list)
+        if ([w[(id)kCGWindowLayer] intValue] == CGWindowLevelForKey(kCGDesktopWindowLevelKey) + 1 &&
+            [w[(id)kCGWindowOwnerName] isEqual:@"Dock"]) full = YES;
+    if (list) CFRelease(list);
+    return full;
+}
+
+// Na saída, um processo à parte devolve a foto original assim que a mesa normal estiver na frente
+// (desiste se outro Wallpaper Engine abrir). Só ele apaga o arquivo com a original.
+static void restore_desktop_picture(void) {
+    NSString *orig = [NSString stringWithContentsOfFile:original_file() encoding:NSUTF8StringEncoding error:nil];
+    if (!orig.length || [orig containsString:@"'"]) return;
+    NSString *js = [NSString stringWithFormat:
+        @"ObjC.import('AppKit');ObjC.import('CoreGraphics');delay(3);"
+        "for(var i=0;i<86400;i++){var a=ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1,0)))||[];"
+        "if(a.some(w=>w.kCGWindowOwnerName=='wine'&&w.kCGWindowLayer==%d))break;"
+        "if(!a.some(w=>w.kCGWindowOwnerName=='Dock'&&w.kCGWindowLayer==%d)){var u=$.NSURL.URLWithString('%@'),s=$.NSScreen.screens;"
+        "for(var j=0;j<s.count;j++)$.NSWorkspace.sharedWorkspace.setDesktopImageURLForScreenOptionsError(u,s.objectAtIndex(j),$({}),null);"
+        "$.NSFileManager.defaultManager.removeItemAtPathError('%@',null);break;}delay(1);}",
+        CGWindowLevelForKey(kCGDesktopWindowLevelKey), CGWindowLevelForKey(kCGDesktopWindowLevelKey) + 1, orig, original_file()];
+    pid_t pid;
+    char *args[] = {"/usr/bin/osascript", "-l", "JavaScript", "-e", (char *)js.UTF8String, NULL};
+    char *env[] = {"PATH=/usr/bin:/bin", NULL};
+    posix_spawn(&pid, args[0], NULL, NULL, args, env);
+}
+
+static NSURL *pending_preview;
+static NSWindow *wp_win;
+static void apply_preview(void) {
+    if (!pending_preview || on_fullscreen_space()) return;
+    // Guarda a foto original uma vez só (se o Wallpaper Engine fechar à força, ela continua guardada)
+    NSURL *current = [[NSWorkspace sharedWorkspace] desktopImageURLForScreen:NSScreen.screens.firstObject];
+    if ([current.path isEqual:pending_preview.path]) { pending_preview = nil; return; }   // já está
+    if (current && ![current.path hasPrefix:[winmac_dir() stringByAppendingPathComponent:@"wallpaper-preview-"]] &&
+        ![NSFileManager.defaultManager fileExistsAtPath:original_file()])
+        [current.absoluteString writeToFile:original_file() atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    // A barra de menus só recalcula a cor com a foto à vista: esconde a janela por um instante
+    // (quase não se nota, a foto nova é a prévia do mesmo papel de parede)
+    BOOL shown = wp_win.visible;
+    if (shown) [wp_win orderOut:nil];
+    set_desktop_picture(pending_preview);
+    pending_preview = nil;
+    if (shown) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [wp_win orderFrontRegardless]; });
+}
+
+static void match_desktop_picture(void) {
+    const char *prefix = getenv("WINEPREFIX");
+    if (!prefix) return;
+    NSString *drive = [@(prefix) stringByAppendingPathComponent:@"drive_c"];
+    NSData *json = [NSData dataWithContentsOfFile:[NSFileManager.defaultManager.currentDirectoryPath
+                                                    stringByAppendingPathComponent:@"config.json"]];
+    if (!json) json = [NSData dataWithContentsOfFile:[drive stringByAppendingPathComponent:
+                        @"Program Files (x86)/Steam/steamapps/common/wallpaper_engine/config.json"]];
+    NSDictionary *cfg = json ? [NSJSONSerialization JSONObjectWithData:json options:0 error:nil] : nil;
+    if (![cfg isKindOfClass:NSDictionary.class]) return;
+    NSString *project = nil;
+    for (NSDictionary *user in cfg.allValues) {
+        if (![user isKindOfClass:NSDictionary.class]) continue;
+        id sel = [user valueForKeyPath:@"general.wallpaperconfig.selectedwallpapers"];
+        if (![sel isKindOfClass:NSDictionary.class]) continue;
+        id file = [sel[@"Monitor0"] isKindOfClass:NSDictionary.class] ? sel[@"Monitor0"][@"file"] : nil;
+        if ([file isKindOfClass:NSString.class]) project = file;
+    }
+    if (project.length < 3) return;
+    // "C:/Program Files (x86)/..." → <bottle>/drive_c/Program Files (x86)/...
+    project = [drive stringByAppendingPathComponent:[[project substringFromIndex:3] stringByReplacingOccurrencesOfString:@"\\" withString:@"/"]];
+    NSDictionary *proj = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:project] ?: [NSData data] options:0 error:nil];
+    NSString *preview = [proj isKindOfClass:NSDictionary.class] ? proj[@"preview"] : nil;
+    if (![preview isKindOfClass:NSString.class]) return;
+    NSImage *img = [[NSImage alloc] initWithContentsOfFile:[project.stringByDeletingLastPathComponent stringByAppendingPathComponent:preview]];
+    CGImageRef cg = [img CGImageForProposedRect:NULL context:nil hints:nil];
+    if (!cg) return;
+    NSData *png = [[[NSBitmapImageRep alloc] initWithCGImage:cg] representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    // Um nome por papel de parede: com o mesmo nome o macOS não percebe a troca
+    NSString *dest = [winmac_dir() stringByAppendingPathComponent:[NSString stringWithFormat:@"wallpaper-preview-%@.png",
+                      project.stringByDeletingLastPathComponent.lastPathComponent]];
+    if (![png writeToFile:dest atomically:YES]) return;
+    pending_preview = [NSURL fileURLWithPath:dest];
+    static id observer;
+    if (!observer)   // em tela cheia: troca quando a mesa normal vier para a frente
+        observer = [NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceActiveSpaceDidChangeNotification
+                     object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{ apply_preview(); }); }];
+    apply_preview();
+}
+
 static NSWindow *wallpaper_window(void) {
-    static NSWindow *win;
-    if (win) return win;
+    match_desktop_picture();   // a cada janela nova: pega a troca de papel de parede no Wallpaper Engine
+    if (wp_win) return wp_win;
+    atexit(restore_desktop_picture);
     NSScreen *screen = NSScreen.screens.firstObject;
-    win = [[NSWindow alloc] initWithContentRect:screen.frame styleMask:NSWindowStyleMaskBorderless
+    wp_win = [[NSWindow alloc] initWithContentRect:screen.frame styleMask:NSWindowStyleMaskBorderless
                                         backing:NSBackingStoreBuffered defer:NO];
-    win.releasedWhenClosed = NO;
-    win.level = CGWindowLevelForKey(kCGDesktopWindowLevelKey) + 2;   // acima da foto, abaixo dos ícones
-    win.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary |
+    wp_win.releasedWhenClosed = NO;
+    wp_win.level = CGWindowLevelForKey(kCGDesktopWindowLevelKey);   // nível da foto do fundo: atrás dos ícones da mesa
+    wp_win.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary |
                              NSWindowCollectionBehaviorIgnoresCycle;
-    win.ignoresMouseEvents = YES;
-    win.hasShadow = NO;
-    win.backgroundColor = NSColor.blackColor;
-    win.title = @"WinMac Wallpaper Engine";
-    win.contentView.wantsLayer = YES;
-    [win orderFrontRegardless];
-    return win;
+    wp_win.ignoresMouseEvents = YES;
+    wp_win.hasShadow = NO;
+    wp_win.backgroundColor = NSColor.blackColor;
+    wp_win.title = @"WinMac Wallpaper Engine";
+    wp_win.contentView.wantsLayer = YES;
+    [wp_win orderFrontRegardless];
+    return wp_win;
 }
 
 static struct macdrv_win_data *get_win_data(void *hwnd) {

@@ -247,6 +247,10 @@ fix_wallpaper_engine() {
     cp "$WRAP_EXE" "$dir/wallpaperui.exe"
   fi
   [ -f "$dir/wallpaperui_real.exe" ] && echo "$WEBHELPER_FLAGS" > "$dir/winmac_flags.txt"
+  # Sem Wallpaper Engine aberto, reinicia o auxiliar: pega a versão nova depois de uma atualização
+  if pgrep -f winmac-progman.exe >/dev/null && ! pgrep -f wallpaper64.exe >/dev/null; then
+    "$WINE" taskkill /F /IM winmac-progman.exe >/dev/null 2>&1
+  fi
   if [ -f "$PROGMAN_EXE" ] && ! pgrep -f winmac-progman.exe >/dev/null; then
     "$WINE" "Z:$PROGMAN_EXE" >/dev/null 2>&1 &
     disown

@@ -10,7 +10,9 @@ static HWND progman, icons, worker;
 // Como no Windows 10 depois da mensagem 0x052C: uma WorkerW com os ícones (SHELLDLL_DefView) e,
 // logo abaixo dela, a WorkerW vazia onde o papel de parede é desenhado.
 static void make_worker(HINSTANCE inst) {
-    if (worker) return;
+    // Recria a cada 0x052C: se um Wallpaper Engine anterior foi fechado à força, as WorkerW velhas
+    // fazem o próximo esperar para sempre
+    if (worker) { HWND w = worker, i = icons; worker = icons = NULL; DestroyWindow(w); DestroyWindow(i); }
     int w = GetSystemMetrics(SM_CXSCREEN), h = GetSystemMetrics(SM_CYSCREEN);
     worker = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"WorkerW", L"WinMac Wallpaper",
                              WS_POPUP | WS_CLIPCHILDREN, 0, 0, w, h, NULL, NULL, inst, NULL);

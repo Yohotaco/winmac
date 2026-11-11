@@ -110,7 +110,9 @@ O Wallpaper Engine tinha dois problemas no Wine:
 - **Interface preta:** a interface é um Chromium cujo processo de GPU cai em loop. O `wallpaperui.exe` ganha o mesmo embrulho do `steamwebhelper`, que liga o Chromium sem GPU.
 - **Papel de parede não aplicava:** o motor procura a área de trabalho do Windows (a janela `Progman`, depois uma `WorkerW` com os ícones e outra `WorkerW` atrás dela) e espera para sempre, porque o Wine do Mac não cria nenhuma. O [`tools/progman.c`](tools/progman.c) (`winmac-progman.exe`) cria essas janelas, invisíveis. Como a janela do papel de parede fica em outro processo, o `winmac-dxmt.dylib` dá ao processo do Wallpaper Engine uma janela do tamanho da tela no nível do papel de parede do macOS: atrás de todas as janelas e abaixo dos ícones da mesa, em todos os Spaces e sem pegar cliques.
 
-O `winmac` aplica as duas coisas sozinho sempre que abre a Steam num bottle com o Wallpaper Engine.
+- **Faixa branca na barra de menus:** no macOS 26 a barra de menus tira a cor do véu da foto de fundo do Mac, não do que está desenhado por cima. Com uma foto clara, aparecia uma faixa branca sobre o papel de parede animado. Enquanto o Wallpaper Engine roda, a foto de fundo vira a prévia do papel de parede escolhido; ao fechar, a original volta. A troca espera a mesa normal estar na frente, porque num app em tela cheia ela não vale para a mesa.
+
+O `winmac` aplica tudo isso sozinho sempre que abre a Steam num bottle com o Wallpaper Engine.
 
 Para recompilar o auxiliar (precisa do `mingw-w64`, `brew install mingw-w64`): `x86_64-w64-mingw32-gcc -O2 -municode -mwindows -static -o tools/winmac-progman.exe tools/progman.c`
 
