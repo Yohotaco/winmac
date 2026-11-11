@@ -85,7 +85,14 @@ No Wine do macOS, o navegador interno da Steam (`steamwebhelper.exe`) desenha pe
 --disable-gpu --disable-gpu-compositing --in-process-gpu --disable-features=CalculateNativeWinOcclusion --disable-direct-composition
 ```
 
-A Steam é aberta com `-noverifyfiles` para não desfazer o embrulho. Se uma atualização da Steam trocar o arquivo, o `winmac` reaplica o embrulho na próxima vez que abrir a Steam.
+A Steam é aberta com `-noverifyfiles` para não desfazer o embrulho. Programas como o LuaTools reabrem a Steam sem essa opção; como a Steam só confere o tamanho dos arquivos, o embrulho é completado com zeros até o tamanho do original e passa na conferência. Se uma atualização da Steam trouxer um `steamwebhelper.exe` novo, uma guarda que roda enquanto o Wine está aberto reaplica o embrulho e reinicia o navegador da Steam.
+
+## Programas .NET (ex.: LuaTools)
+
+Programas .NET abriam e fechavam na hora no Wine por dois motivos, que o `winmac` resolve sozinho:
+
+- com o .NET do Mac instalado (Homebrew), a variável `DOTNET_ROOT` fazia o programa procurar o .NET numa pasta do Mac, não no .NET do bottle. O `winmac` tira essa variável antes de abrir o Wine;
+- o log no Visualizador de Eventos do Windows precisa de uma DLL que esses programas não trazem (`System.Threading.AccessControl`). O `winmac` desliga esse log com `Logging__EventLog__LogLevel__Default=None`.
 
 Para recompilar o embrulho: `x86_64-w64-mingw32-gcc -O2 -municode -mwindows -o tools/steamwebhelper-wrap.exe tools/webhelper_wrap.c`
 

@@ -17,6 +17,12 @@
 #   winmac update [app]       baixa a versão mais nova do comando, das ferramentas e do app (se passar o caminho)
 
 # O Wine fica em /Applications ou, sem permissão de gravar lá, em ~/Applications (WINMAC_APPS escolhe outra pasta)
+# Apps .NET (ex.: LuaTools) sob o Wine:
+#  - o .NET do Mac (Homebrew) define DOTNET_ROOT, e o app procura o runtime nessa pasta do Mac, não no do bottle;
+#  - o log no EventLog do Windows precisa de uma DLL que não vem nesses apps (System.Threading.AccessControl)
+#    e o app fecha logo ao abrir: desliga esse log.
+unset DOTNET_ROOT DOTNET_ROOT_X64 DOTNET_ROOT_X86 DOTNET_ROOT_ARM64
+export Logging__EventLog__LogLevel__Default=None
 APP_DIRS=("/Applications" "$HOME/Applications")
 [ -n "$WINMAC_APPS" ] && APP_DIRS=("$WINMAC_APPS")
 use_wine_dir() {
@@ -155,16 +161,19 @@ steam_installed() { [ -f "$(bottle_path "$1")/drive_c/Program Files (x86)/Steam/
 # desenhar por software. Se a Steam se atualizar e trocar o arquivo, ele é reaplicado aqui.
 fix_webhelper() {
   local dir="$WINEPREFIX/drive_c/Program Files (x86)/Steam/bin/cef/cef.win64"
-  [ -f "$dir/steamwebhelper.exe" ] && [ -f "$WRAP_EXE" ] || return 0
-  if ! cmp -s "$WRAP_EXE" "$dir/steamwebhelper.exe"; then
-    # O original da Steam tem vários MB; o embrulho tem ~150 KB. Só guarda como _real se for o original
-    # (senão, ao atualizar o embrulho, a versão antiga dele apagaria o original).
-    if [ "$(stat -f%z "$dir/steamwebhelper.exe")" -gt 1000000 ]; then
-      mv -f "$dir/steamwebhelper.exe" "$dir/steamwebhelper_real.exe"
-    fi
-    cp "$WRAP_EXE" "$dir/steamwebhelper.exe"
+  local exe="$dir/steamwebhelper.exe" real="$dir/steamwebhelper_real.exe" rsize
+  [ -f "$exe" ] && [ -f "$WRAP_EXE" ] || return 0
+  # O embrulho fica com o mesmo tamanho do original (completado com zeros): a Steam só confere o tamanho
+  # dos arquivos, então não desfaz o embrulho nem quando é aberta sem -noverifyfiles (ex.: pelo LuaTools).
+  # É o original da Steam se tem conteúdo depois do 1º MB (o embrulho tem ~150 KB e o resto é zero).
+  if [ "$(stat -f%z "$exe")" -gt 1000000 ] && [ "$(tail -c +1000001 "$exe" | tr -d '\0' | head -c 1 | wc -c)" -gt 0 ]; then
+    mv -f "$exe" "$real"
   fi
-  [ -f "$dir/steamwebhelper_real.exe" ] || return 0
+  [ -f "$real" ] || return 0
+  rsize=$(stat -f%z "$real")
+  if ! cmp -s "$WRAP_EXE" <(head -c "$(stat -f%z "$WRAP_EXE")" "$exe" 2>/dev/null) || [ "$(stat -f%z "$exe" 2>/dev/null)" != "$rsize" ]; then
+    cp "$WRAP_EXE" "$exe.tmp" && dd if=/dev/zero of="$exe.tmp" bs=1 count=0 seek="$rsize" 2>/dev/null && mv -f "$exe.tmp" "$exe"
+  fi
   echo "$WEBHELPER_FLAGS" > "$dir/winmac_flags.txt"
 }
 
@@ -172,6 +181,31 @@ fix_webhelper() {
 # que o Wine do macOS não implementa: o fundo fica preto. O winmac-transparent.dylib é carregado nos
 # processos do Wine e deixa a janela desses jogos transparente. A lista é montada procurando, nos jogos
 # Unity instalados, o uso de DwmExtendFrameIntoClientArea.
+# Programas como o LuaTools reabrem a Steam sozinhos, sem o -noverifyfiles. Se a Steam se atualizar e trouxer
+# um steamwebhelper novo, ele roda sem o embrulho e a tela fica preta. Esta guarda roda em segundo plano
+# enquanto o Wine estiver aberto: se o original voltar, recoloca o embrulho e fecha o webhelper (a Steam o
+# reabre já embrulhado).
+guard_webhelper() {
+  [ -f "$WRAP_EXE" ] && [ -d "$WINEPREFIX/drive_c/Program Files (x86)/Steam" ] || return 0
+  local pidfile="$WINEPREFIX/.winmac-guard.pid"
+  [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null && return 0
+  (
+    trap 'rm -f "$pidfile"' EXIT
+    idle=0
+    while [ "$idle" -lt 20 ]; do
+      sleep 3
+      if pgrep -x wineserver >/dev/null; then idle=0; else idle=$((idle+1)); continue; fi
+      fix_webhelper
+      if pgrep -f 'cef\.win64\\steamwebhelper\.exe --type=' >/dev/null; then
+        pkill -f 'cef\.win64\\steamwebhelper'
+        sleep 5
+      fi
+    done
+  ) >/dev/null 2>&1 &
+  echo $! > "$pidfile"
+  disown
+}
+
 DXMT_DYLIB="$HOME_DIR/tools/winmac-dxmt.dylib"
 TRANSPARENT_DYLIB="$HOME_DIR/tools/winmac-transparent.dylib"
 transparent_exes() {
@@ -230,6 +264,7 @@ prepare_launch() {
   fi
   [ -n "$inject" ] && export DYLD_INSERT_LIBRARIES="$inject"
   fix_wallpaper_engine
+  guard_webhelper
 }
 
 # Wallpaper Engine:
