@@ -114,6 +114,8 @@ O Wallpaper Engine tinha dois problemas no Wine:
 
 O `winmac` aplica tudo isso sozinho sempre que abre a Steam num bottle com o Wallpaper Engine.
 
+**Sem a Steam e desde o login:** na primeira vez que a Steam abre pelo WinMac com o Wallpaper Engine instalado, o WinMac cria um item de login do macOS (`~/Library/LaunchAgents/com.winmac.wallpaper.plist`). Ele abre o motor ao entrar no Mac, sem precisar da Steam, e reabre o motor se ele fechar (por exemplo, com **Fechar tudo**). A tela bloqueada mostra a foto de fundo, que é a prévia do papel de parede (parada: o macOS não deixa outros apps desenharem na tela bloqueada). Para desligar: `winmac wallpaper off`; para ligar de novo: `winmac wallpaper on`.
+
 Para recompilar o auxiliar (precisa do `mingw-w64`, `brew install mingw-w64`): `x86_64-w64-mingw32-gcc -O2 -municode -mwindows -static -o tools/winmac-progman.exe tools/progman.c`
 
 ## Licença

@@ -12,6 +12,7 @@
 #   winmac import             traz para o WinMac todos os bottles do CrossOver que têm Steam (jogos, saves, login)
 #   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
 #   winmac kill [bottle]      fecha tudo que está rodando no bottle
+#   winmac wallpaper [on|off] papel de parede animado do Wallpaper Engine sem a Steam, desde o login
 #   winmac restore [bottle]   restaura o registro original do CrossOver (backup)
 #   winmac update [app]       baixa a versão mais nova do comando, das ferramentas e do app (se passar o caminho)
 
@@ -257,8 +258,39 @@ fix_wallpaper_engine() {
   fi
 }
 
+# Papel de parede animado sem a Steam: o motor roda sozinho e um item de login do macOS (LaunchAgent)
+# abre ele ao ligar o Mac e reabre se fechar (ex.: "Fechar tudo"). `winmac wallpaper off` desliga.
+WP_AGENT="$HOME/Library/LaunchAgents/com.winmac.wallpaper.plist"
+WP_OFF="$HOME_DIR/.wallpaper-off"
+wallpaper_exe() { echo "$(steam_apps "$1")/common/wallpaper_engine/wallpaper64.exe"; }
+wallpaper_agent_on() {
+  mkdir -p "$(dirname "$WP_AGENT")"
+  cat > "$WP_AGENT" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.winmac.wallpaper</string>
+<key>ProgramArguments</key><array><string>/bin/bash</string><string>$HOME_DIR/winmac</string><string>wallpaper</string><string>run</string><string>$1</string></array>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><true/>
+<key>ThrottleInterval</key><integer>15</integer>
+<key>AbandonProcessGroup</key><true/>
+<key>StandardOutPath</key><string>$HOME_DIR/wallpaper.log</string>
+<key>StandardErrorPath</key><string>$HOME_DIR/wallpaper.log</string>
+</dict></plist>
+EOF
+  launchctl bootout "gui/$(id -u)/com.winmac.wallpaper" 2>/dev/null
+  launchctl bootstrap "gui/$(id -u)" "$WP_AGENT"
+}
+# Chamado ao abrir a Steam: liga o item de login na primeira vez que acha o Wallpaper Engine
+wallpaper_autostart() {
+  [ -f "$(wallpaper_exe "$BOTTLE")" ] && [ ! -f "$WP_AGENT" ] && [ ! -f "$WP_OFF" ] && wallpaper_agent_on "$BOTTLE"
+  return 0
+}
+
 launch_steam() {
   prepare_launch
+  wallpaper_autostart
   # Sem nohup: ele é um programa protegido do macOS e apagaria o DYLD_INSERT_LIBRARIES
   "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" "$@" >/dev/null 2>&1 &
   disown
@@ -708,6 +740,29 @@ case "$1" in
     pgrep -f "CrossOver.app/.*wineserver" >/dev/null && { echo "Feche o CrossOver primeiro."; exit 1; }
     mkdir -p "$HOME_DIR/Bottles" && mv "$src" "$HOME_DIR/Bottles/$name" && ln -s "$HOME_DIR/Bottles/$name" "$src"
     echo "Bottle '$name' agora mora em ~/winmac/Bottles (o CrossOver ainda acha ele pelo atalho)." ;;
+  wallpaper)
+    BOTTLE="${3:-$DEFAULT_BOTTLE}"
+    case "$2" in
+      off)
+        launchctl bootout "gui/$(id -u)/com.winmac.wallpaper" 2>/dev/null
+        rm -f "$WP_AGENT"; touch "$WP_OFF"
+        export WINEPREFIX="$(bottle_path "$BOTTLE")"; "$WINE" taskkill /IM wallpaper64.exe >/dev/null 2>&1
+        echo "Papel de parede animado desligado." ;;
+      run)   # chamado pelo item de login: fica rodando enquanto o motor estiver aberto
+        setup_env "$3"
+        exe="$(wallpaper_exe "$BOTTLE")"
+        [ -f "$exe" ] || { echo "Wallpaper Engine não instalado no bottle $BOTTLE"; sleep 3600; exit 1; }
+        if pgrep -f wallpaper64.exe >/dev/null; then   # já aberto (pela Steam): só acompanha
+          while pgrep -f wallpaper64.exe >/dev/null; do sleep 10; done; exit 0
+        fi
+        prepare_launch
+        sleep 5   # o motor precisa achar a área de trabalho (winmac-progman) já criada
+        cd "$(dirname "$exe")" && "$WINE" 'C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine\wallpaper64.exe' -nobrowse >/dev/null 2>&1 ;;
+      *)
+        [ -f "$(wallpaper_exe "$BOTTLE")" ] || { echo "Wallpaper Engine não instalado no bottle $BOTTLE"; exit 1; }
+        rm -f "$WP_OFF"; wallpaper_agent_on "$BOTTLE"
+        echo "Papel de parede animado ligado: abre sozinho ao entrar no Mac, mesmo sem a Steam." ;;
+    esac ;;
   update)
     self_update "$2" ;;
   restore)
