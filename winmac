@@ -239,6 +239,9 @@ prepare_launch() {
 #     winmac-progman.exe cria essa área, invisível, e o winmac-dxmt.dylib mostra o papel de parede numa
 #     janela no nível do papel de parede do macOS (atrás de todas as janelas).
 PROGMAN_EXE="$HOME_DIR/tools/winmac-progman.exe"
+# Só os processos do Wine (a linha de comando começa com a unidade, ex.: "C:\\" ou "Z:/")
+WP_PROC='^[A-Za-z]:.*wallpaper64\.exe'
+PROGMAN_PROC='^[A-Za-z]:.*winmac-progman\.exe'
 fix_wallpaper_engine() {
   local dir="$(steam_apps "$BOTTLE")/common/wallpaper_engine/bin"
   [ -d "$dir" ] || return 0
@@ -249,10 +252,10 @@ fix_wallpaper_engine() {
   fi
   [ -f "$dir/wallpaperui_real.exe" ] && echo "$WEBHELPER_FLAGS" > "$dir/winmac_flags.txt"
   # Sem Wallpaper Engine aberto, reinicia o auxiliar: pega a versão nova depois de uma atualização
-  if pgrep -f winmac-progman.exe >/dev/null && ! pgrep -f wallpaper64.exe >/dev/null; then
+  if pgrep -f "$PROGMAN_PROC" >/dev/null && ! pgrep -f "$WP_PROC" >/dev/null; then
     "$WINE" taskkill /F /IM winmac-progman.exe >/dev/null 2>&1
   fi
-  if [ -f "$PROGMAN_EXE" ] && ! pgrep -f winmac-progman.exe >/dev/null; then
+  if [ -f "$PROGMAN_EXE" ] && ! pgrep -f "$PROGMAN_PROC" >/dev/null; then
     "$WINE" "Z:$PROGMAN_EXE" >/dev/null 2>&1 &
     disown
   fi
@@ -752,8 +755,8 @@ case "$1" in
         setup_env "$3"
         exe="$(wallpaper_exe "$BOTTLE")"
         [ -f "$exe" ] || { echo "Wallpaper Engine não instalado no bottle $BOTTLE"; sleep 3600; exit 1; }
-        if pgrep -f wallpaper64.exe >/dev/null; then   # já aberto (pela Steam): só acompanha
-          while pgrep -f wallpaper64.exe >/dev/null; do sleep 10; done; exit 0
+        if pgrep -f "$WP_PROC" >/dev/null; then   # já aberto (pela Steam): só acompanha
+          while pgrep -f "$WP_PROC" >/dev/null; do sleep 10; done; exit 0
         fi
         prepare_launch
         sleep 5   # o motor precisa achar a área de trabalho (winmac-progman) já criada

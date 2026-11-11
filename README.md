@@ -48,7 +48,7 @@ Os jogos abertos pela Steam usam o [DXMT](https://github.com/3Shain/dxmt) (códi
 
 O DXMT precisa que o Wine exporte umas funções do driver de janelas do Mac (`macdrv_functions`), coisa que só o Wine do CrossOver faz. O WinMac fornece essas funções com o módulo [`tools/dxmt_shim.m`](tools/dxmt_shim.m), carregado nos processos do Wine junto com a Steam. Ele usa as classes do próprio Wine (`WineWindow`, `WineContentView`, `WineMetalView`) para criar a camada Metal na janela do jogo.
 
-Para recompilar: `clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -framework Foundation -framework AppKit -framework QuartzCore -framework Metal -Wl,-undefined,dynamic_lookup -o tools/winmac-dxmt.dylib tools/dxmt_shim.m && codesign -s - -f tools/winmac-dxmt.dylib`
+Para recompilar: `clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -framework Foundation -framework AppKit -framework QuartzCore -framework Metal -framework AudioToolbox -Wl,-undefined,dynamic_lookup -o tools/winmac-dxmt.dylib tools/dxmt_shim.m && codesign -s - -f tools/winmac-dxmt.dylib`
 
 ## Steam do Mac e Steam do CrossOver
 
@@ -114,7 +114,7 @@ O Wallpaper Engine tinha dois problemas no Wine:
 
 O `winmac` aplica tudo isso sozinho sempre que abre a Steam num bottle com o Wallpaper Engine.
 
-**Sem a Steam e desde o login:** na primeira vez que a Steam abre pelo WinMac com o Wallpaper Engine instalado, o WinMac cria um item de login do macOS (`~/Library/LaunchAgents/com.winmac.wallpaper.plist`). Ele abre o motor ao entrar no Mac, sem precisar da Steam, e reabre o motor se ele fechar (por exemplo, com **Fechar tudo**). A tela bloqueada mostra a foto de fundo, que é a prévia do papel de parede (parada: o macOS não deixa outros apps desenharem na tela bloqueada). Para desligar: `winmac wallpaper off`; para ligar de novo: `winmac wallpaper on`.
+**Sem a Steam e desde o login:** na primeira vez que a Steam abre pelo WinMac com o Wallpaper Engine instalado, o WinMac cria um item de login do macOS (`~/Library/LaunchAgents/com.winmac.wallpaper.plist`). Ele abre o motor ao entrar no Mac, sem precisar da Steam, e reabre o motor se ele fechar (por exemplo, com **Fechar tudo**). A tela bloqueada mostra a foto de fundo, que é a prévia do papel de parede (parada: o macOS não deixa outros apps desenharem na tela bloqueada). O papel de parede fica sem som: no processo do Wallpaper Engine, o `winmac-dxmt.dylib` liga a saída de áudio do macOS com volume zero (a Steam e os jogos continuam com som). Para desligar: `winmac wallpaper off`; para ligar de novo: `winmac wallpaper on`.
 
 Para recompilar o auxiliar (precisa do `mingw-w64`, `brew install mingw-w64`): `x86_64-w64-mingw32-gcc -O2 -municode -mwindows -static -o tools/winmac-progman.exe tools/progman.c`
 

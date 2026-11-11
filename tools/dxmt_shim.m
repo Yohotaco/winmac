@@ -170,6 +170,22 @@ static NSWindow *wallpaper_window(void) {
     return wp_win;
 }
 
+// Papel de parede sem som: o áudio do Wine sai por uma AudioUnit do macOS; no processo do Wallpaper Engine
+// ela começa com volume zero. Nos outros processos (Steam, jogos) não muda nada.
+#include <AudioToolbox/AudioToolbox.h>
+static OSStatus muted_start(AudioUnit unit) {
+    if (is_wallpaper_process()) {
+        OSStatus err = AudioUnitSetParameter(unit, kHALOutputParam_Volume, kAudioUnitScope_Global, 0, 0.0f, 0);
+        AudioUnitParameterValue vol = -1;
+        AudioUnitGetParameter(unit, kHALOutputParam_Volume, kAudioUnitScope_Global, 0, &vol);
+        FILE *f = fopen([winmac_dir() stringByAppendingPathComponent:@"wallpaper.log"].fileSystemRepresentation, "a");
+        if (f) { fprintf(f, "Wallpaper Engine sem som (status %d, volume %.2f)\n", (int)err, vol); fclose(f); }
+    }
+    return AudioOutputUnitStart(unit);
+}
+__attribute__((used, section("__DATA,__interpose")))
+static const struct { const void *replacement, *original; } interpose_start = { (const void *)muted_start, (const void *)AudioOutputUnitStart };
+
 static struct macdrv_win_data *get_win_data(void *hwnd) {
     struct macdrv_win_data *d = calloc(1, sizeof(*d));
     d->hwnd = hwnd;
