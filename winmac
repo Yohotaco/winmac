@@ -12,6 +12,7 @@
 #   winmac import             traz para o WinMac todos os bottles do CrossOver que têm Steam (jogos, saves, login)
 #   winmac migrate [bottle]   move o bottle do CrossOver para ~/winmac/Bottles (deixa atalho de volta)
 #   winmac kill [bottle]      fecha tudo que está rodando no bottle
+#   winmac logs               abre a pasta com os erros dos jogos (~/winmac/logs) para mandar ao suporte
 #   winmac wallpaper [on|off] papel de parede animado do Wallpaper Engine sem a Steam, desde o login
 #   winmac restore [bottle]   restaura o registro original do CrossOver (backup)
 #   winmac update [app]       baixa a versão mais nova do comando, das ferramentas e do app (se passar o caminho)
@@ -32,6 +33,9 @@ use_wine_dir() {
 use_wine_dir "${APP_DIRS[0]}"
 for d in "${APP_DIRS[@]}"; do [ -x "$d/Wine Staging.app/Contents/Resources/wine/bin/wine" ] && { use_wine_dir "$d"; break; }; done
 HOME_DIR="$HOME/winmac"
+# Logs dos jogos: só os erros do Wine (sem os avisos "fixme", que são milhares). Para mandar ao suporte.
+LOG_DIR="$HOME_DIR/logs"
+GAME_WINEDEBUG="fixme-all"
 CX_BOTTLES="$HOME/Library/Application Support/CrossOver/Bottles"
 DEFAULT_BOTTLE="Steam"
 STEAM_EXE='C:\Program Files (x86)\Steam\steam.exe'
@@ -196,6 +200,8 @@ guard_webhelper() {
       sleep 3
       if pgrep -x wineserver >/dev/null; then idle=0; else idle=$((idle+1)); continue; fi
       fix_webhelper
+      # O log da Steam não passa de 20 MB (ela é aberta com >>, então zerar o arquivo funciona)
+      [ "$(stat -f%z "$LOG_DIR/steam.log" 2>/dev/null || echo 0)" -gt 20000000 ] && : > "$LOG_DIR/steam.log"
       if pgrep -f 'cef\.win64\\steamwebhelper\.exe --type=' >/dev/null; then
         pkill -f 'cef\.win64\\steamwebhelper'
         sleep 5
@@ -329,8 +335,13 @@ wallpaper_autostart() {
 launch_steam() {
   prepare_launch
   wallpaper_autostart
+  # Os erros da Steam e dos jogos abertos por ela vão para ~/winmac/logs/steam.log (o anterior vira steam.old.log)
+  mkdir -p "$LOG_DIR"
+  if ! pgrep -f 'Steam\\steam\.exe' >/dev/null; then
+    [ -f "$LOG_DIR/steam.log" ] && mv -f "$LOG_DIR/steam.log" "$LOG_DIR/steam.old.log"
+  fi
   # Sem nohup: ele é um programa protegido do macOS e apagaria o DYLD_INSERT_LIBRARIES
-  "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" "$@" >/dev/null 2>&1 &
+  WINEDEBUG="$GAME_WINEDEBUG" "$WINE" "$STEAM_EXE" "${STEAM_ARGS[@]}" "$@" >> "$LOG_DIR/steam.log" 2>&1 &
   disown
 }
 
@@ -469,6 +480,24 @@ GPTK_WINESERVER="$GPTK_DIR/bin/wineserver"
 D3DM_OFF="$HOME_DIR/d3dmetal-off"   # appids que não abrem com o D3DMetal
 
 has_d3dmetal() { [ -x "$GPTK_WINE" ] && [ -d "$GPTK_DIR/lib/external/D3DMetal.framework" ]; }
+# .exe de 32 bits: o cabeçalho PE (endereço no byte 0x3C) diz a máquina, 0x14c = i386
+exe_is_32bit() {
+  local off
+  off=$(od -An -tu4 -j60 -N4 "$1" 2>/dev/null | tr -d ' ')
+  [ -n "$off" ] && [ "$(od -An -tx2 -j$((off + 4)) -N2 "$1" 2>/dev/null | tr -d ' ')" = 014c ]
+}
+# Jogo aberto pelo D3DMetal travado (ex.: parado na tela de carregamento): o "Fechar tudo" fecha ele também
+# e marca o jogo para abrir pela Steam na próxima vez
+kill_d3dmetal() {
+  local shadow="$HOME_DIR/Bottles/.d3dmetal-$(basename "$WINEPREFIX")" id
+  [ -x "$GPTK_WINESERVER" ] && [ -d "$shadow" ] || return 0
+  if [ -f "$shadow/.winmac-playing" ]; then
+    id=$(cat "$shadow/.winmac-playing")
+    touch "$shadow/.winmac-killed"
+    [ -n "$id" ] && set_d3dmetal "$id" off
+  fi
+  WINEPREFIX="$shadow" "$GPTK_WINESERVER" -k 2>/dev/null
+}
 d3dmetal_off() { grep -qx "$1" "$D3DM_OFF" 2>/dev/null; }
 set_d3dmetal() {
   touch "$D3DM_OFF"; grep -vx "$1" "$D3DM_OFF" > "$D3DM_OFF.tmp"; mv "$D3DM_OFF.tmp" "$D3DM_OFF"
@@ -548,15 +577,24 @@ play_d3dmetal() {
     -o -iname 'upc_r*_loader*.dll' -o -iname 'PlayGTAV.exe' -o -iname 'Link2EA*' \) 2>/dev/null | head -1)" ] && return 1
   exe=$(game_exe "$dir")
   [ -n "$exe" ] || return 1
+  # O D3DMetal só roda jogos de 64 bits. Os de 32 bits (ex.: LEGO Marvel, LEGO O Hobbit) travavam na
+  # tela de carregamento: vão direto pela Steam e ficam marcados para não tentar de novo.
+  if exe_is_32bit "$exe"; then set_d3dmetal "$id" off; return 1; fi
   case ":$(transparent_exes "$BOTTLE"):" in *":$(basename "$exe"):"*) return 1 ;; esac
   shadow=$(d3dmetal_prefix) || return 1
   key=$(unity_prefs_key "$exe")
+  mkdir -p "$LOG_DIR"
   (
     [ -n "$key" ] && copy_reg_key "$WINE" "$WINEPREFIX" "$GPTK_WINE" "$shadow" "$key"
     start=$(date +%s)
-    cd "$(dirname "$exe")" && WINEPREFIX="$shadow" "$GPTK_WINE" "$(basename "$exe")"
+    echo "$id" > "$shadow/.winmac-playing"; rm -f "$shadow/.winmac-killed"
+    cd "$(dirname "$exe")" && WINEPREFIX="$shadow" WINEDEBUG="$GAME_WINEDEBUG" "$GPTK_WINE" "$(basename "$exe")" \
+      > "$LOG_DIR/$id.log" 2>&1
     WINEPREFIX="$shadow" "$GPTK_WINESERVER" -w
-    if [ $(( $(date +%s) - start )) -lt 20 ]; then
+    rm -f "$shadow/.winmac-playing"
+    if [ -f "$shadow/.winmac-killed" ]; then
+      rm -f "$shadow/.winmac-killed"   # fechado no "Fechar tudo" (travou): não reabre sozinho
+    elif [ $(( $(date +%s) - start )) -lt 20 ]; then
       set_d3dmetal "$id" off      # não abriu: na próxima vez vai direto pela Steam
       fix_webhelper; launch_steam -applaunch "$id"
     elif [ -n "$key" ]; then
@@ -771,7 +809,9 @@ case "$1" in
     run_program "$2"
     echo "Abrindo $(basename "$2")..." ;;
   kill)
-    export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; echo "Bottle fechado." ;;
+    export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; kill_d3dmetal; echo "Bottle fechado." ;;
+  logs)
+    mkdir -p "$LOG_DIR"; open "$LOG_DIR"; echo "Logs em $LOG_DIR" ;;
   migrate)
     name="${2:-$DEFAULT_BOTTLE}"; src="$CX_BOTTLES/$name"
     [ -d "$src" ] && [ ! -L "$src" ] || { echo "Nada para migrar em $src"; exit 1; }
