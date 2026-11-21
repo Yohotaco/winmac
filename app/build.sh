@@ -48,13 +48,40 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+# WinMac Quadros (quadros extras, no lugar do Lossless Scaling): app próprio dentro do WinMac, para a permissão de
+# Gravação de Tela ficar com ele. O Info.plist dele não leva a versão: assim a assinatura só muda quando o código
+# muda, e o macOS não pede a permissão de novo a cada atualização. Precisa do macOS 26 (SDK 26 ou mais novo).
+QAPP="$APP/Contents/Helpers/WinMac Quadros.app"
+if "${SWIFTC[@]}" -O -swift-version 5 -target arm64-apple-macos26.0 ../tools/framegen.swift -o build/Quadros-arm64 &&
+   "${SWIFTC[@]}" -O -swift-version 5 -target x86_64-apple-macos26.0 ../tools/framegen.swift -o build/Quadros-x86_64; then
+  mkdir -p "$QAPP/Contents/MacOS" "$QAPP/Contents/Resources"
+  lipo -create build/Quadros-arm64 build/Quadros-x86_64 -output "$QAPP/Contents/MacOS/WinMac Quadros"
+  cp "$APP/Contents/Resources/WinMac.icns" "$QAPP/Contents/Resources/"
+  cat > "$QAPP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>WinMac Quadros</string>
+<key>CFBundleDisplayName</key><string>WinMac Quadros</string>
+<key>CFBundleIdentifier</key><string>local.winmac.quadros</string>
+<key>CFBundleExecutable</key><string>WinMac Quadros</string>
+<key>CFBundleIconFile</key><string>WinMac</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>26.0</string>
+<key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+PLIST
+  codesign --force -s - "$QAPP"
+else
+  echo "Aviso: sem o SDK do macOS 26, o WinMac sai sem os quadros extras (WinMac Quadros)."
+fi
 codesign --force --deep -s - "$APP"
 [ "$1" = "--no-install" ] && { echo "Compilado em $(pwd)/$APP"; exit 0; }
 mkdir -p "$HOME/winmac/Bottles" && cp ../winmac "$HOME/winmac/winmac" && chmod +x "$HOME/winmac/winmac"
 mkdir -p "$HOME/winmac/tools"
-# Ferramentas em uso (o winmac-fg na barra de menus, as .dylib dentro da Steam e do Wallpaper Engine) caem se o
-# arquivo for sobrescrito no lugar: pula as iguais e troca as outras por um arquivo novo (mv)
-for f in steamwebhelper-wrap.exe winmac-transparent.dylib winmac-dxmt.dylib winmac-progman.exe winmac-fg; do
+# Ferramentas em uso (as .dylib dentro da Steam e do Wallpaper Engine) caem se o arquivo for sobrescrito no
+# lugar: pula as iguais e troca as outras por um arquivo novo (mv)
+for f in steamwebhelper-wrap.exe winmac-transparent.dylib winmac-dxmt.dylib winmac-progman.exe lossless-wrap.exe; do
   cmp -s "../tools/$f" "$HOME/winmac/tools/$f" && continue
   cp "../tools/$f" "$HOME/winmac/tools/.$f.new" && mv "$HOME/winmac/tools/.$f.new" "$HOME/winmac/tools/$f"
 done

@@ -52,23 +52,31 @@ Para recompilar: `clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobj
 
 ## Quadros extras (no lugar do Lossless Scaling)
 
-O [Lossless Scaling](https://store.steampowered.com/app/993090/) não roda no Wine: ele captura a tela com funções que só o Windows tem e fecha ao abrir. O WinMac faz a geração de quadros dele pelo próprio macOS, com a ferramenta `winmac-fg` ([`tools/framegen.swift`](tools/framegen.swift)):
+O [Lossless Scaling](https://store.steampowered.com/app/993090/) não roda no Wine: ele captura a tela com funções que só o Windows tem e fecha ao abrir. O WinMac faz a geração de quadros dele pelo próprio macOS, com o app **WinMac Quadros** ([`tools/framegen.swift`](tools/framegen.swift)), que vem dentro do WinMac.app:
 
 1. o ScreenCaptureKit captura só a janela do jogo;
 2. o interpolador de baixa latência do VideoToolbox cria um quadro entre cada dois quadros do jogo. Ele roda no Neural Engine, então não tira GPU do jogo;
 3. uma janela por cima do jogo mostra os quadros reais e os gerados alternados, no ritmo da tela. O mouse e o teclado passam direto para o jogo.
 
-Como usar: clique em **Quadros extras** no app (ou rode `winmac fg`, ou clique no Lossless Scaling na lista de jogos). Aparece um ícone na barra de menus. No jogo, aperte **Control+Option+S** (o mesmo atalho do Lossless Scaling) para ligar e de novo para desligar. O canto da janela mostra o FPS real → o FPS na tela. Na primeira vez, o macOS pede a permissão de **Gravação de Tela** para o WinMac (ou para o Terminal).
+**Como usar:**
+
+1. Abra a janela do WinMac Quadros: botão **Quadros extras** no app, o **Lossless Scaling** na lista de jogos do WinMac, o botão **Iniciar** do Lossless Scaling na Steam, ou `winmac fg` no Terminal.
+2. Na primeira vez, a janela pede a permissão de **Gravação de Tela**: clique em **Abrir os Ajustes**, ligue o **WinMac Quadros** na lista e clique em **Reabrir**.
+3. Com o jogo aberto, clique em **Ligar no jogo**: o WinMac Quadros acha a janela do jogo do Windows sozinho e volta para ela. Também dá para apertar **Control+Option+S** dentro do jogo (o mesmo atalho do Lossless Scaling), para ligar e desligar.
+
+Quando liga, aparece no jogo o aviso "Quadros extras ligados" e, no canto, o FPS do jogo → o FPS na tela (ex.: `30 → 60 FPS`). A janela do WinMac Quadros mostra a mesma coisa.
 
 - Precisa do macOS 26 ou mais novo num Mac com chip Apple.
 - **2x** (padrão) leva um jogo de 30 para 60 FPS. No M2, cada quadro gerado leva uns 9 ms numa janela de 960×540 e de 13 a 18 ms em 1470×956 (tela cheia do MacBook Air) com o jogo rodando. Acima de 1920×1080 a captura é reduzida, porque esse é o limite do interpolador.
-- Se o jogo já roda perto da taxa da tela (acima de 75% dela), os quadros passam direto, sem geração e sem o atraso dela. Quadros repetidos (jogo parado no menu) são descartados.
-- A janela por cima fica 99% opaca: uma janela 100% opaca faz o macOS achar que o jogo está coberto, e o jogo cai para ~1 FPS. A mistura de 1% não aparece, porque embaixo está a mesma imagem.
-- **3x** e **4x** (`winmac fg 3x`, ou no menu) são para jogos abaixo de 20 FPS, e capturam no máximo em 1280×720.
-- Como no Lossless Scaling, os quadros gerados aumentam um pouco o atraso (meio quadro do jogo mais o tempo da interpolação). Não adianta passar da taxa da tela: num monitor de 60 Hz, use em jogos que rodam abaixo de 60 FPS.
-- Funciona com qualquer janela do Mac, não só com jogos do Wine. `winmac fg off` fecha a ferramenta.
+- **3x** e **4x** são para jogos abaixo de 20 FPS, e capturam no máximo em 1280×720.
+- Não adianta passar da taxa da tela. Se o jogo já roda acima de 75% dela (45 FPS numa tela de 60 Hz), os quadros passam direto, sem geração e sem o atraso dela, e a janela avisa. Quadros repetidos (jogo parado no menu) são descartados.
+- Como no Lossless Scaling, os quadros gerados aumentam um pouco o atraso (meio quadro do jogo mais o tempo da interpolação).
+- A janela por cima do jogo fica 99% opaca: uma janela 100% opaca faz o macOS achar que o jogo está coberto, e o jogo cai para ~1 FPS. A mistura de 1% não aparece, porque embaixo está a mesma imagem.
+- Na Steam, o `LosslessScaling.exe` é trocado por um embrulho ([`tools/lossless_wrap.c`](tools/lossless_wrap.c)) que abre o WinMac Quadros (o Wine consegue abrir programas do Mac). O original fica como `LosslessScaling_real.exe`.
+- O WinMac Quadros é um app próprio para a permissão de Gravação de Tela ficar com ele, não importa quem o abriu. A assinatura dele só muda quando o código dele muda, então as atualizações do WinMac não pedem a permissão de novo.
+- Funciona com qualquer janela do Mac: sem jogo do Windows aberto, **Ligar no jogo** espera 5 segundos para você clicar na janela do jogo. `winmac fg off` fecha o WinMac Quadros.
 
-Para recompilar: `for a in arm64 x86_64; do swiftc -O -swift-version 5 -target $a-apple-macos26.0 tools/framegen.swift -o /tmp/winmac-fg-$a; done && lipo -create /tmp/winmac-fg-arm64 /tmp/winmac-fg-x86_64 -output tools/winmac-fg && codesign -s - -f tools/winmac-fg`
+O `app/build.sh` compila o WinMac Quadros junto com o app (precisa do SDK do macOS 26). Para recompilar o embrulho: `x86_64-w64-mingw32-gcc -Os -s -municode -mwindows -o tools/lossless-wrap.exe tools/lossless_wrap.c`
 
 ## Steam do Mac e Steam do CrossOver
 
@@ -87,7 +95,7 @@ Para recompilar: `for a in arm64 x86_64; do swiftc -O -swift-version 5 -target $
 | `winmac run <exe> [bottle]` | Roda qualquer `.exe` |
 | `winmac migrate [bottle]` | Move um bottle do CrossOver para `~/winmac/Bottles` e deixa um atalho no lugar antigo |
 | `winmac kill [bottle]` | Fecha tudo que está rodando no bottle |
-| `winmac fg [off\|2x\|3x\|4x]` | Quadros extras nos jogos, no lugar do Lossless Scaling (Control+Option+S no jogo) |
+| `winmac fg [off\|2x\|3x\|4x]` | Abre o WinMac Quadros (quadros extras nos jogos, no lugar do Lossless Scaling) |
 
 Os bottles ficam em `~/winmac/Bottles/<nome>`. Se a pasta não existir, o WinMac procura em `~/Library/Application Support/CrossOver/Bottles/<nome>`.
 

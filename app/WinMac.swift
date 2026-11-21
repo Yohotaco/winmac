@@ -373,14 +373,13 @@ struct ContentView: View {
                             Label("Fechar tudo", systemImage: "stop.fill")
                         }
                         .controlSize(.large)
-                        // No lugar do Lossless Scaling (que não roda no Wine): ícone na barra de menus e
-                        // Control+Option+S no jogo liga e desliga
+                        // No lugar do Lossless Scaling (que não roda no Wine): abre a janela do WinMac Quadros
                         if #available(macOS 26.0, *) {
                             Button { model.run(["fg"]) } label: {
                                 Label("Quadros extras", systemImage: "rectangle.stack.fill")
                             }
                             .controlSize(.large)
-                            .help("Mais FPS como no Lossless Scaling: gera um quadro entre cada dois do jogo. No jogo, aperte Control+Option+S para ligar e desligar.")
+                            .help("Mais FPS como no Lossless Scaling: abre o WinMac Quadros, que gera um quadro entre cada dois do jogo.")
                         }
                     }
                     Spacer()

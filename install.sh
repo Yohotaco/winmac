@@ -41,6 +41,7 @@ curl -fsL -o "$HOME/winmac/tools/steamwebhelper-wrap.exe" "$RAW/tools/steamwebhe
 curl -fsL -o "$HOME/winmac/tools/winmac-transparent.dylib" "$RAW/tools/winmac-transparent.dylib"
 curl -fsL -o "$HOME/winmac/tools/winmac-dxmt.dylib" "$RAW/tools/winmac-dxmt.dylib"
 curl -fsL -o "$HOME/winmac/tools/winmac-progman.exe" "$RAW/tools/winmac-progman.exe"
+curl -fsL -o "$HOME/winmac/tools/lossless-wrap.exe" "$RAW/tools/lossless-wrap.exe"
 
 echo "==> Pronto! Abrindo o WinMac. Clique em \"Instalar Steam\"."
 open "$DEST/WinMac.app"
