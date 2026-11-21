@@ -14,6 +14,7 @@
 #   winmac kill [bottle]      fecha tudo que está rodando no bottle
 #   winmac logs               abre a pasta com os erros dos jogos (~/winmac/logs) para mandar ao suporte
 #   winmac wallpaper [on|off] papel de parede animado do Wallpaper Engine sem a Steam, desde o login
+#   winmac fg [off|2x|3x|4x]  quadros extras nos jogos, no lugar do Lossless Scaling (Control+Option+S no jogo)
 #   winmac restore [bottle]   restaura o registro original do CrossOver (backup)
 #   winmac update [app]       baixa a versão mais nova do comando, das ferramentas e do app (se passar o caminho)
 
@@ -123,7 +124,7 @@ latest_tag() {
 }
 ensure_tools() {
   local f tag tmp
-  for f in tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe; do
+  for f in tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe tools/winmac-fg; do
     [ -f "$HOME_DIR/$f" ] && continue
     [ -n "$tag" ] || tag=$(latest_tag)
     [ -n "$tag" ] || return 0
@@ -615,7 +616,7 @@ self_update() {
   [ -n "$latest" ] || { echo "UPDATE_ERRO Não consegui falar com o GitHub. Confira a internet e tente de novo."; return 1; }
   tmp=$(mktemp -d) || { echo "UPDATE_ERRO Não consegui criar uma pasta temporária. Confira o espaço livre no disco."; return 1; }
   # Comando e ferramentas: troca só o que mudou (mv cria arquivo novo, então não atrapalha quem está usando)
-  for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe; do
+  for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe tools/winmac-fg; do
     if ! curl -fsL --max-time 60 -o "$tmp/new" "https://raw.githubusercontent.com/$REPO/$latest/$f" || [ ! -s "$tmp/new" ]; then
       [ "$f" = winmac ] || continue
       echo "UPDATE_ERRO Não consegui baixar a nova versão. Confira a internet e tente de novo."
@@ -644,6 +645,44 @@ self_update() {
     fi
   fi
   rm -rf "$tmp"
+}
+
+# ---------- Quadros extras (no lugar do Lossless Scaling) ----------
+# O Lossless Scaling fecha ao abrir no Wine: ele captura a tela com funções que só o Windows tem (o DXMT
+# responde "Not implemented" e o programa cai em UI.Core.Init). O winmac-fg (tools/framegen.swift) faz o
+# mesmo trabalho pelo macOS: captura a janela do jogo, cria os quadros intermediários com o interpolador
+# do VideoToolbox (macOS 26+, no Neural Engine) e mostra tudo numa janela por cima do jogo que deixa o mouse
+# passar. Fica na barra de menus; Control+Option+S (o atalho do Lossless Scaling) liga e desliga no jogo.
+FG_EXE="$HOME_DIR/tools/winmac-fg"
+FG_CONF="$HOME_DIR/framegen.conf"
+LOSSLESS_APPID=993090
+fg_running() { pgrep -xf "$FG_EXE" >/dev/null; }
+framegen() {
+  case "$1" in
+    off)
+      if fg_running; then pkill -xf "$FG_EXE"; echo "Quadros extras desligados."
+      else echo "Os quadros extras já estavam desligados."; fi
+      return 0 ;;
+    2x|3x|4x)
+      { grep -v '^multiplier=' "$FG_CONF" 2>/dev/null; echo "multiplier=${1%x}"; } > "$FG_CONF.tmp" && mv "$FG_CONF.tmp" "$FG_CONF"
+      fg_running && pkill -HUP -xf "$FG_EXE" ;;
+    ""|on) ;;
+    *) echo "Uso: winmac fg [off|2x|3x|4x]"; return 1 ;;
+  esac
+  if [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 26 ]; then
+    echo "Os quadros extras precisam do macOS 26 ou mais novo."; return 1
+  fi
+  [ -x "$FG_EXE" ] || ensure_tools
+  [ -x "$FG_EXE" ] || { echo "Não encontrei o $FG_EXE. Rode: winmac update"; return 1; }
+  if ! fg_running; then
+    mkdir -p "$LOG_DIR"
+    # Na primeira vez o macOS pede a permissão de Gravação de Tela para o app que abriu (WinMac ou Terminal)
+    nohup "$FG_EXE" >> "$LOG_DIR/framegen.log" 2>/dev/null &
+    disown
+    sleep 1
+    fg_running || { echo "Os quadros extras não abriram: $(tail -1 "$LOG_DIR/framegen.log" 2>/dev/null)"; return 1; }
+  fi
+  echo "Quadros extras prontos: no jogo, aperte Control+Option+S (de novo para desligar)."
 }
 
 # Bottles do CrossOver com Steam instalada que ainda não foram trazidos para o WinMac
@@ -786,6 +825,10 @@ case "$1" in
     fix_webhelper
     BOTTLE="$2"; launch_steam; echo "Steam abrindo..." ;;
   play)
+    if [ "$2" = "$LOSSLESS_APPID" ] || [[ "$2" =~ ^[Ll]ossless ]]; then
+      echo "O Lossless Scaling não roda no Wine; o WinMac faz o mesmo com os quadros extras."
+      framegen; exit $?
+    fi
     setup_env "$3"
     id="$2"
     if ! [[ "$id" =~ ^[0-9]+$ ]]; then
@@ -812,6 +855,8 @@ case "$1" in
     export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; kill_d3dmetal; echo "Bottle fechado." ;;
   logs)
     mkdir -p "$LOG_DIR"; open "$LOG_DIR"; echo "Logs em $LOG_DIR" ;;
+  fg)
+    framegen "$2" ;;
   migrate)
     name="${2:-$DEFAULT_BOTTLE}"; src="$CX_BOTTLES/$name"
     [ -d "$src" ] && [ ! -L "$src" ] || { echo "Nada para migrar em $src"; exit 1; }

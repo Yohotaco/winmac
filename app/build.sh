@@ -51,6 +51,12 @@ PLIST
 codesign --force --deep -s - "$APP"
 [ "$1" = "--no-install" ] && { echo "Compilado em $(pwd)/$APP"; exit 0; }
 mkdir -p "$HOME/winmac/Bottles" && cp ../winmac "$HOME/winmac/winmac" && chmod +x "$HOME/winmac/winmac"
-mkdir -p "$HOME/winmac/tools" && cp ../tools/steamwebhelper-wrap.exe ../tools/winmac-transparent.dylib ../tools/winmac-dxmt.dylib ../tools/winmac-progman.exe "$HOME/winmac/tools/"
+mkdir -p "$HOME/winmac/tools"
+# Ferramentas em uso (o winmac-fg na barra de menus, as .dylib dentro da Steam e do Wallpaper Engine) caem se o
+# arquivo for sobrescrito no lugar: pula as iguais e troca as outras por um arquivo novo (mv)
+for f in steamwebhelper-wrap.exe winmac-transparent.dylib winmac-dxmt.dylib winmac-progman.exe winmac-fg; do
+  cmp -s "../tools/$f" "$HOME/winmac/tools/$f" && continue
+  cp "../tools/$f" "$HOME/winmac/tools/.$f.new" && mv "$HOME/winmac/tools/.$f.new" "$HOME/winmac/tools/$f"
+done
 rm -rf /Applications/WinMac.app && cp -R "$APP" /Applications/
 echo "Instalado em /Applications/WinMac.app"
