@@ -81,7 +81,7 @@ mkdir -p "$HOME/winmac/Bottles" && cp ../winmac "$HOME/winmac/winmac" && chmod +
 mkdir -p "$HOME/winmac/tools"
 # Ferramentas em uso (as .dylib dentro da Steam e do Wallpaper Engine) caem se o arquivo for sobrescrito no
 # lugar: pula as iguais e troca as outras por um arquivo novo (mv)
-for f in steamwebhelper-wrap.exe winmac-transparent.dylib winmac-dxmt.dylib winmac-progman.exe lossless-wrap.exe; do
+for f in steamwebhelper-wrap.exe winmac-transparent.dylib winmac-dxmt.dylib winmac-progman.exe lossless-wrap.exe winmac-vk32.dylib winmac-vk32.json; do
   cmp -s "../tools/$f" "$HOME/winmac/tools/$f" && continue
   cp "../tools/$f" "$HOME/winmac/tools/.$f.new" && mv "$HOME/winmac/tools/.$f.new" "$HOME/winmac/tools/$f"
 done

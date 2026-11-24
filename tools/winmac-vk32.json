@@ -1,0 +1,17 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_WINMAC_vk32",
+        "type": "GLOBAL",
+        "library_path": "./winmac-vk32.dylib",
+        "api_version": "1.4.0",
+        "implementation_version": "1",
+        "description": "WinMac: jogos de 32 bits no Vulkan do MoltenVK (memoria importada do host)",
+        "functions": {
+            "vkGetInstanceProcAddr": "winmac_vk32_GetInstanceProcAddr",
+            "vkGetDeviceProcAddr": "winmac_vk32_GetDeviceProcAddr",
+            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+        },
+        "disable_environment": { "WINMAC_DISABLE_VK32": "1" }
+    }
+}

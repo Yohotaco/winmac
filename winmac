@@ -82,6 +82,8 @@ setup_env() {
   ensure_tools
   configure_bottle
   install_dxmt
+  # Camada Vulkan dos jogos de 32 bits (ver vk32_for_exe); não muda nada nos de 64 bits
+  [ -f "$HOME_DIR/tools/winmac-vk32.json" ] && export VK_ADD_IMPLICIT_LAYER_PATH="$HOME_DIR/tools"
 }
 
 WINE_URL="https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-staging-11.18-osx64.tar.xz"
@@ -124,7 +126,7 @@ latest_tag() {
 }
 ensure_tools() {
   local f tag tmp
-  for f in tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe tools/lossless-wrap.exe; do
+  for f in tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe tools/lossless-wrap.exe tools/winmac-vk32.dylib tools/winmac-vk32.json; do
     [ -f "$HOME_DIR/$f" ] && continue
     [ -n "$tag" ] || tag=$(latest_tag)
     [ -n "$tag" ] || return 0
@@ -256,6 +258,31 @@ install_dxmt() {
   fi
 }
 
+# Jogos DirectX 9 (e 8, DirectDraw) de 32 bits travam ao abrir em 3 a 5 de cada 10 vezes, com a janela
+# branca: no Mac com chip Apple, a troca do modo 32 para o 64 bits do Rosetta falha durante a preparação do
+# OpenGL (bug 60494 do Wine, em todas as versões testadas, 11.0 a 11.21). Com o renderizador Vulkan do Wine
+# o OpenGL não é usado e o travamento some (0 em 28). O Vulkan só funciona em 32 bits com a camada
+# winmac-vk32 (o MoltenVK recusa a memória do host que o Wine de 32 bits usa). Vale só para o .exe do jogo.
+vk32_for_exe() {
+  [ -f "$HOME_DIR/tools/winmac-vk32.json" ] && exe_is_32bit "$1" || return 0
+  "$WINE" reg add "HKCU\\Software\\Wine\\AppDefaults\\$(basename "$1")\\Direct3D" /v renderer /t REG_SZ /d vulkan /f >/dev/null 2>&1
+}
+# Jogos da Steam: uma vez por jogo instalado (a lista dos já vistos fica no bottle)
+vk32_steam_games() {
+  local acf id dir exe seen="$WINEPREFIX/.winmac-vk32"
+  [ -f "$HOME_DIR/tools/winmac-vk32.json" ] || return 0
+  for acf in "$(steam_apps "$BOTTLE")"/appmanifest_*.acf; do
+    [ -f "$acf" ] || continue
+    id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$acf")
+    grep -qx "$id" "$seen" 2>/dev/null && continue
+    dir="$(steam_apps "$BOTTLE")/common/$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)".*/\1/p' "$acf")"
+    exe=$(game_exe "$dir")
+    [ -n "$exe" ] || continue   # ainda baixando: tenta de novo na próxima vez
+    vk32_for_exe "$exe"
+    echo "$id" >> "$seen"
+  done
+}
+
 # Abre a Steam (com argumentos extras) já com o módulo de transparência
 prepare_launch() {
   # Sobras de uma sessão do Wine que travou (processos sem wineserver) impedem a Steam de abrir
@@ -273,6 +300,7 @@ prepare_launch() {
   [ -n "$inject" ] && export DYLD_INSERT_LIBRARIES="$inject"
   fix_wallpaper_engine
   fix_lossless
+  vk32_steam_games
   guard_webhelper
 }
 
@@ -393,6 +421,7 @@ run_program() {
   file=$(basename "$1"); ext=$(printf '%s' "${1##*.}" | tr 'A-Z' 'a-z')
   fix_wpf
   prepare_launch
+  [ "$ext" = exe ] && vk32_for_exe "$1"
   cd "$(dirname "$1")" || { echo "Não encontrei a pasta de $file."; exit 1; }
   case "$ext" in
     msi) cmd=("$WINE" msiexec /i "$file") ;;
@@ -618,7 +647,7 @@ self_update() {
   [ -n "$latest" ] || { echo "UPDATE_ERRO Não consegui falar com o GitHub. Confira a internet e tente de novo."; return 1; }
   tmp=$(mktemp -d) || { echo "UPDATE_ERRO Não consegui criar uma pasta temporária. Confira o espaço livre no disco."; return 1; }
   # Comando e ferramentas: troca só o que mudou (mv cria arquivo novo, então não atrapalha quem está usando)
-  for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe tools/lossless-wrap.exe; do
+  for f in winmac tools/steamwebhelper-wrap.exe tools/winmac-transparent.dylib tools/winmac-dxmt.dylib tools/winmac-progman.exe tools/lossless-wrap.exe tools/winmac-vk32.dylib tools/winmac-vk32.json; do
     if ! curl -fsL --max-time 60 -o "$tmp/new" "https://raw.githubusercontent.com/$REPO/$latest/$f" || [ ! -s "$tmp/new" ]; then
       [ "$f" = winmac ] || continue
       echo "UPDATE_ERRO Não consegui baixar a nova versão. Confira a internet e tente de novo."
