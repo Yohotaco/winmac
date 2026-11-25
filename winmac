@@ -4,7 +4,7 @@
 #   winmac setup [bottle]     instala o Wine (se faltar) e a Steam oficial num bottle novo
 #   winmac list               lista bottles e jogos da Steam
 #   winmac steam [bottle]     abre a Steam
-#   winmac play <appid|nome>  abre um jogo (com o D3DMetal da Apple, se o Game Porting Toolkit estiver instalado)
+#   winmac play <appid|nome>  abre um jogo direto pelo .exe, sem a Steam (com o D3DMetal da Apple, se o Game Porting Toolkit estiver instalado)
 #   winmac d3dmetal <appid> on|off   liga/desliga o D3DMetal num jogo
 #   winmac run <exe> [bottle] roda qualquer .exe
 #   winmac add <pasta|exe> [bottle] adiciona um programa à lista do app e abre
@@ -337,6 +337,7 @@ fix_wallpaper_engine() {
 # abre ele ao ligar o Mac e reabre se fechar (ex.: "Fechar tudo"). `winmac wallpaper off` desliga.
 WP_AGENT="$HOME/Library/LaunchAgents/com.winmac.wallpaper.plist"
 WP_OFF="$HOME_DIR/.wallpaper-off"
+WE_APPID=431960
 wallpaper_exe() { echo "$(steam_apps "$1")/common/wallpaper_engine/wallpaper64.exe"; }
 wallpaper_agent_on() {
   mkdir -p "$(dirname "$WP_AGENT")"
@@ -416,8 +417,10 @@ fix_wpf() {
 }
 
 # Abre um programa na pasta dele. Com "wait", só volta quando ele fechar (instaladores).
+# Com um arquivo no 3º argumento, os erros do Wine vão para ele (logs dos jogos).
 run_program() {
-  local file ext cmd
+  local file ext cmd log="${3:-/dev/null}" dbg="$WINEDEBUG"
+  [ -n "$3" ] && dbg="$GAME_WINEDEBUG"
   file=$(basename "$1"); ext=$(printf '%s' "${1##*.}" | tr 'A-Z' 'a-z')
   fix_wpf
   prepare_launch
@@ -432,7 +435,7 @@ run_program() {
   if [ "$2" = wait ]; then
     "${cmd[@]}" >/dev/null 2>&1
   else
-    "${cmd[@]}" >/dev/null 2>&1 &
+    WINEDEBUG="$dbg" "${cmd[@]}" > "$log" 2>&1 &
     disown
   fi
 }
@@ -504,8 +507,8 @@ add_program() {
 # Simulator: 22 → 89 FPS no M2). Ele só funciona no Wine do Game Porting Toolkit, que não roda a Steam;
 # por isso a Steam continua no Wine Staging e o jogo abre direto no Wine do GPTK, num bottle-sombra
 # (~/winmac/Bottles/.d3dmetal-<bottle>) que usa a mesma pasta de usuário (saves em arquivo) e copia as
-# configurações/saves do Unity (registro) na ida e na volta. Se o jogo fechar logo (ex.: exige a Steam),
-# o WinMac abre pela Steam e lembra disso para a próxima vez.
+# configurações/saves do Unity (registro) na ida e na volta. Se o jogo fechar logo, o WinMac abre o .exe
+# no Wine Staging (play_direct) e lembra disso para a próxima vez.
 GPTK_DIR="/Applications/Game Porting Toolkit.app/Contents/Resources/wine"
 GPTK_WINE="$GPTK_DIR/bin/wine64"
 GPTK_WINESERVER="$GPTK_DIR/bin/wineserver"
@@ -519,7 +522,7 @@ exe_is_32bit() {
   [ -n "$off" ] && [ "$(od -An -tx2 -j$((off + 4)) -N2 "$1" 2>/dev/null | tr -d ' ')" = 014c ]
 }
 # Jogo aberto pelo D3DMetal travado (ex.: parado na tela de carregamento): o "Fechar tudo" fecha ele também
-# e marca o jogo para abrir pela Steam na próxima vez
+# e marca o jogo para abrir no Wine Staging na próxima vez
 kill_d3dmetal() {
   local shadow="$HOME_DIR/Bottles/.d3dmetal-$(basename "$WINEPREFIX")" id
   [ -x "$GPTK_WINESERVER" ] && [ -d "$shadow" ] || return 0
@@ -543,9 +546,36 @@ game_exe() {
     [ -d "${e%.exe}_Data" ] && { echo "$e"; return; }
   done < <(find "$dir" -maxdepth 3 -iname '*.exe' 2>/dev/null)
   best=$(find "$dir" -maxdepth 3 -iname '*.exe' 2>/dev/null \
-    | grep -viE 'unitycrashhandler|trial|demo|unins|setup|redist|vcredist|dxsetup|crashreport|easyanticheat|battleye|_be\.exe' \
+    | grep -viE 'unitycrashhandler|trial|demo|unins|setup|instal|redist|vcredist|dxsetup|crashreport|easyanticheat|battleye|_be\.exe|_real\.exe' \
     | while IFS= read -r e; do echo "$(stat -f %z "$e") $e"; done | sort -rn | head -1 | cut -d' ' -f2-)
   echo "$best"
+}
+
+# Pasta de um jogo da Steam instalado (vazio se o appid não está instalado no bottle)
+steam_game_dir() {
+  local acf="$(steam_apps "$BOTTLE")/appmanifest_$1.acf"
+  [ -f "$acf" ] || return 1
+  echo "$(steam_apps "$BOTTLE")/common/$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)".*/\1/p' "$acf")"
+}
+
+# Jogos da Steam abertos direto pelo .exe: sem o steam_appid.txt ao lado do .exe, os jogos com Steamworks
+# fecham e se reabrem pela Steam. Com ele o jogo segue sozinho; se precisar da Steam (DRM, conquistas,
+# multiplayer), é só abrir a Steam antes que o jogo se conecta a ela.
+no_steam_restart() {
+  local f="$(dirname "$1")/steam_appid.txt"
+  [ -f "$f" ] || printf '%s\n' "$2" > "$f"
+}
+
+# Abre o jogo da Steam no Wine Staging, direto pelo .exe (como o "winmac run"). Retorna 1 se não achou o .exe.
+play_direct() {
+  local id="$1" dir exe
+  if [ "$id" = "$WE_APPID" ]; then exe=$(wallpaper_exe "$BOTTLE")   # o motor, não a interface
+  else dir=$(steam_game_dir "$id") && exe=$(game_exe "$dir"); fi
+  [ -f "$exe" ] || return 1
+  no_steam_restart "$exe" "$id"
+  mkdir -p "$LOG_DIR"
+  run_program "$exe" "" "$LOG_DIR/$id.log"
+  echo "Abrindo $(basename "$exe")..."
 }
 
 # Chave do registro onde o Unity guarda configurações e saves (PlayerPrefs)
@@ -596,24 +626,23 @@ d3dmetal_prefix() {
   echo "$shadow"
 }
 
-# Abre o jogo com o D3DMetal; volta para a Steam se não der. Retorna 1 se nem tentou.
+# Abre o jogo com o D3DMetal; volta para o Wine Staging se não der. Retorna 1 se nem tentou.
 play_d3dmetal() {
-  local id="$1" acf dir exe key shadow
-  has_d3dmetal && ! d3dmetal_off "$id" || return 1
-  acf="$(steam_apps "$BOTTLE")/appmanifest_$id.acf"
-  [ -f "$acf" ] || return 1
-  dir="$(steam_apps "$BOTTLE")/common/$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)".*/\1/p' "$acf")"
-  # Jogos que dependem de outro launcher (EA app, Ubisoft Connect, Rockstar) precisam abrir pela Steam,
-  # onde o launcher está instalado
+  local id="$1" dir exe key shadow
+  has_d3dmetal && ! d3dmetal_off "$id" && [ "$id" != "$WE_APPID" ] || return 1
+  dir=$(steam_game_dir "$id") || return 1
+  # Jogos que dependem de outro launcher (EA app, Ubisoft Connect, Rockstar) precisam abrir no bottle
+  # da Steam, onde o launcher está instalado
   [ -d "$dir/__Installer" ] || [ -f "$dir/EAStore.ini" ] || [ -n "$(find "$dir" -maxdepth 2 \( -iname 'uplay_r1_loader*.dll' \
     -o -iname 'upc_r*_loader*.dll' -o -iname 'PlayGTAV.exe' -o -iname 'Link2EA*' \) 2>/dev/null | head -1)" ] && return 1
   exe=$(game_exe "$dir")
   [ -n "$exe" ] || return 1
   # O D3DMetal só roda jogos de 64 bits. Os de 32 bits (ex.: LEGO Marvel, LEGO O Hobbit) travavam na
-  # tela de carregamento: vão direto pela Steam e ficam marcados para não tentar de novo.
+  # tela de carregamento: vão direto para o Wine Staging e ficam marcados para não tentar de novo.
   if exe_is_32bit "$exe"; then set_d3dmetal "$id" off; return 1; fi
   case ":$(transparent_exes "$BOTTLE"):" in *":$(basename "$exe"):"*) return 1 ;; esac
   shadow=$(d3dmetal_prefix) || return 1
+  no_steam_restart "$exe" "$id"
   key=$(unity_prefs_key "$exe")
   mkdir -p "$LOG_DIR"
   (
@@ -627,8 +656,8 @@ play_d3dmetal() {
     if [ -f "$shadow/.winmac-killed" ]; then
       rm -f "$shadow/.winmac-killed"   # fechado no "Fechar tudo" (travou): não reabre sozinho
     elif [ $(( $(date +%s) - start )) -lt 20 ]; then
-      set_d3dmetal "$id" off      # não abriu: na próxima vez vai direto pela Steam
-      fix_webhelper; launch_steam -applaunch "$id"
+      set_d3dmetal "$id" off      # não abriu: na próxima vez vai direto para o Wine Staging
+      play_direct "$id"
     elif [ -n "$key" ]; then
       copy_reg_key "$GPTK_WINE" "$shadow" "$WINE" "$WINEPREFIX" "$key"
     fi
@@ -890,11 +919,10 @@ case "$1" in
       id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f")
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
-    steam_ready "$3" || first_boot
     BOTTLE="$3"
+    # Sem a Steam: o .exe do jogo abre direto (D3DMetal se der, senão Wine Staging, como o "winmac run")
     play_d3dmetal "$id" && exit 0
-    fix_webhelper
-    launch_steam -applaunch "$id"; echo "Abrindo jogo $id..." ;;
+    play_direct "$id" || { echo "Não achei o .exe do jogo $id. Ele terminou de baixar?"; exit 1; } ;;
   d3dmetal)
     [[ "$2" =~ ^[0-9]+$ ]] && [[ "$3" =~ ^(on|off)$ ]] || { echo "Uso: winmac d3dmetal <appid> on|off"; exit 1; }
     set_d3dmetal "$2" "$3"; echo "D3DMetal $3 para o jogo $2." ;;

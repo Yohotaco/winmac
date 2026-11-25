@@ -37,14 +37,21 @@ Se o [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolk
 
 - A Steam continua no Wine Staging. Só o jogo abre no Wine do Game Porting Toolkit, num bottle separado (`~/winmac/Bottles/.d3dmetal-<bottle>`).
 - Os saves em arquivo ficam na mesma pasta de usuário. Nos jogos Unity, as configurações e saves do registro são copiados na ida e na volta.
-- Jogos abertos assim não passam pela Steam: não contam conquistas nem tempo de jogo.
-- Se o jogo fechar em menos de 20 segundos (por exemplo, porque exige a Steam), o WinMac abre ele pela Steam e lembra disso. Para escolher na mão: `winmac d3dmetal <appid> on|off`.
+- Se o jogo fechar em menos de 20 segundos, o WinMac abre ele no Wine Staging e lembra disso. Para escolher na mão: `winmac d3dmetal <appid> on|off`.
+
+## Jogos abertos sem a Steam
+
+Os jogos da lista abrem direto pelo `.exe`, como o `winmac run jogo.exe`: a Steam não precisa estar aberta. O `winmac play` acha o `.exe` principal na pasta do jogo e abre com o D3DMetal (se disponível) ou com o Wine Staging. Os erros vão para `~/winmac/logs/<appid>.log`.
+
+- Ao lado do `.exe` o WinMac cria um `steam_appid.txt`, para o jogo não fechar e se reabrir pela Steam.
+- Sem a Steam aberta, os jogos não contam conquistas nem tempo de jogo.
+- Jogos que exigem a Steam (DRM, multiplayer) ou outro launcher: clique em **Abrir Steam** antes, e o jogo se conecta a ela.
 
 O WinMac não inclui o D3DMetal (a licença da Apple não permite redistribuir); ele usa o que já está instalado no Mac.
 
 ## DirectX 11 direto em Metal com o DXMT
 
-Os jogos abertos pela Steam usam o [DXMT](https://github.com/3Shain/dxmt) (código aberto), que traduz DirectX 10/11 direto para Metal, sem passar pelo Vulkan. É mais rápido que o DXVK e funciona com jogos que dependem da Steam ou de outro launcher (ex.: *Need for Speed Heat* com o app da EA). O `winmac` baixa o DXMT sozinho e copia os arquivos para o bottle toda vez que abre a Steam.
+Os jogos abertos no Wine Staging usam o [DXMT](https://github.com/3Shain/dxmt) (código aberto), que traduz DirectX 10/11 direto para Metal, sem passar pelo Vulkan. É mais rápido que o DXVK e funciona com jogos que dependem da Steam ou de outro launcher (ex.: *Need for Speed Heat* com o app da EA). O `winmac` baixa o DXMT sozinho e copia os arquivos para o bottle toda vez que abre a Steam.
 
 O DXMT precisa que o Wine exporte umas funções do driver de janelas do Mac (`macdrv_functions`), coisa que só o Wine do CrossOver faz. O WinMac fornece essas funções com o módulo [`tools/dxmt_shim.m`](tools/dxmt_shim.m), carregado nos processos do Wine junto com a Steam. Ele usa as classes do próprio Wine (`WineWindow`, `WineContentView`, `WineMetalView`) para criar a camada Metal na janela do jogo.
 
@@ -90,7 +97,7 @@ O `app/build.sh` compila o WinMac Quadros junto com o app (precisa do SDK do mac
 | `winmac setup [bottle]` | Instala o Wine e a Steam oficial num bottle novo |
 | `winmac list` | Lista os bottles e os jogos da Steam |
 | `winmac steam [bottle]` | Abre a Steam |
-| `winmac play <appid\|nome>` | Abre um jogo (com o D3DMetal, se disponível) |
+| `winmac play <appid\|nome>` | Abre um jogo direto pelo `.exe`, sem a Steam (com o D3DMetal, se disponível) |
 | `winmac d3dmetal <appid> on\|off` | Liga ou desliga o D3DMetal num jogo |
 | `winmac run <exe> [bottle]` | Roda qualquer `.exe` |
 | `winmac migrate [bottle]` | Move um bottle do CrossOver para `~/winmac/Bottles` e deixa um atalho no lugar antigo |
