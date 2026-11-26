@@ -174,6 +174,12 @@ final class Model: ObservableObject {
         return FileManager.default.fileExists(atPath: "\(b.path)/\(steamSubdir)/steam.exe")
     }
 
+    // Ubisoft Connect instalado no bottle (vem junto com os jogos da Ubisoft da Steam)
+    var ubisoftInstalled: Bool {
+        guard let b = selected, !b.isMac else { return false }
+        return FileManager.default.fileExists(atPath: "\(b.path)/drive_c/Program Files (x86)/Ubisoft/Ubisoft Game Launcher/upc.exe")
+    }
+
     // Steam do Mac: abre pela própria Steam (steam://), versão nativa do jogo
     func openSteam() {
         guard let b = selected else { return }
@@ -367,6 +373,13 @@ struct ContentView: View {
                             Label("Instalar Steam", systemImage: "arrow.down.circle.fill").padding(.horizontal, 8)
                         }
                         .controlSize(.large).disabled(model.installing)
+                    }
+                    if model.ubisoftInstalled {
+                        Button { model.run(["ubisoft", model.selected?.id ?? "Steam"]) } label: {
+                            Label("Ubisoft Connect", systemImage: "u.circle.fill")
+                        }
+                        .controlSize(.large)
+                        .help("Abre o Ubisoft Connect no motor do CrossOver (no Wine Staging ele não abre). Na primeira vez baixa uns 400 MB.")
                     }
                     if model.selected?.isMac != true {
                         Button { model.run(["kill", model.selected?.id ?? "Steam"]) } label: {

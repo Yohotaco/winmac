@@ -6,6 +6,7 @@
 #   winmac steam [bottle]     abre a Steam
 #   winmac play <appid|nome>  abre um jogo direto pelo .exe, sem a Steam (com o D3DMetal da Apple, se o Game Porting Toolkit estiver instalado)
 #   winmac d3dmetal <appid> on|off   liga/desliga o D3DMetal num jogo
+#   winmac ubisoft [bottle]   abre o Ubisoft Connect (no motor do CrossOver: no Wine Staging ele cai)
 #   winmac run <exe> [bottle] roda qualquer .exe
 #   winmac add <pasta|exe> [bottle] adiciona um programa à lista do app e abre
 #   winmac detect             lista bottles do CrossOver que têm Steam (nome<TAB>nº de jogos)
@@ -666,6 +667,131 @@ play_d3dmetal() {
   echo "Abrindo jogo $id com o D3DMetal da Apple..."
 }
 
+# ---------- Ubisoft Connect (motor do CrossOver) ----------
+# O Ubisoft Connect é de 32 bits e não roda no Wine Staging do Mac com chip Apple: nas chamadas ao sistema,
+# a troca do modo 32 para o 64 bits do Rosetta (no wow64cpu.dll) às vezes falha, o código de 64 bits roda em
+# modo 32 ("page fault on read access to 00002EC5") e o navegador dele (CEF) cai em loop ("CEF render process
+# crashed"); às vezes cai o próprio upc.exe. É da mesma família do bug 60494 (ver vk32_for_exe).
+# O Wine 11 feito do código aberto do CrossOver 26.3 (projeto Highball), com as bibliotecas do Sikarugir, não
+# tem o problema. Ele roda num bottle-sombra (~/winmac/Bottles/.dx12-<bottle>) que usa a mesma pasta do
+# Ubisoft Connect, da Steam e do usuário (login, saves). O CEF desenha por software, com as mesmas opções do
+# steamwebhelper: pela GPU a janela fica vazia.
+CX_DIR="$HOME_DIR/engines/cx26.3-hb35"
+CX_WINE="$CX_DIR/engine/bin/wine"
+CX_WINESERVER="$CX_DIR/engine/bin/wineserver"
+CX_ENGINE_URL="https://github.com/gauthierpiarrette/highball-engine/releases/download/engine-wine-11.0-20261114T185735Z-fiber-mirror-switch/engine-wine-11.0-20261114T185735Z-fiber-mirror-switch.tar.gz"
+CX_ENGINE_SHA="ee1609f037b77d9a1896f3444c7d939ce91f39c81ffa729fdf4d6bdddb34af89"
+CX_RUNTIME_URL="https://github.com/Sikarugir-App/Template/releases/download/v1.0/Template-1.0.11.tar.xz"
+CX_RUNTIME_SHA="9fa15479e7ff6abd99c1d07be285fb95f41fc6991586502427152b1f7d6ccb8a"
+UBI_SUBDIR="Program Files (x86)/Ubisoft/Ubisoft Game Launcher"
+UBI_EXE='C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\upc.exe'
+
+cx_download() {  # <url> <sha256> <arquivo>
+  curl -fL# --retry 3 -o "$3" "$1" && [ "$(shasum -a 256 "$3" | cut -d' ' -f1)" = "$2" ]
+}
+install_cx_engine() {
+  [ -x "$CX_WINE" ] && [ -d "$CX_DIR/frameworks" ] && return 0
+  echo "Baixando o motor do CrossOver (só na primeira vez, ~400 MB)..."
+  local tmp ok=1; tmp=$(mktemp -d) || return 1
+  if cx_download "$CX_ENGINE_URL" "$CX_ENGINE_SHA" "$tmp/engine.tar.gz" &&
+     cx_download "$CX_RUNTIME_URL" "$CX_RUNTIME_SHA" "$tmp/runtime.tar.xz"; then
+    echo "Instalando o motor do CrossOver..."
+    mkdir -p "$tmp/x" "$CX_DIR" && tar -xzf "$tmp/engine.tar.gz" -C "$tmp/x" && tar -xJf "$tmp/runtime.tar.xz" -C "$tmp/x" &&
+      rm -rf "$CX_DIR/engine" "$CX_DIR/frameworks" &&
+      mv "$tmp/x/engine" "$CX_DIR/engine" && mv "$tmp/x"/Template-*.app/Contents/Frameworks "$CX_DIR/frameworks" && ok=0
+    # O runtime traz o D3DMetal da Apple, que o WinMac não usa aqui (o Ubisoft Connect é de 32 bits, e o
+    # D3DMetal só tem a parte de 64 bits) nem guarda (a licença da Apple não permite redistribuir)
+    rm -rf "$CX_DIR/frameworks/renderer/apple_gptk" "$CX_DIR/frameworks/renderer/d3dmetal"
+  fi
+  rm -rf "$tmp"
+  xattr -dr com.apple.quarantine "$CX_DIR" 2>/dev/null
+  [ "$ok" = 0 ] && [ -x "$CX_WINE" ] || { echo "Falha ao baixar o motor do CrossOver. Confira a internet e tente de novo."; return 1; }
+}
+
+# Variáveis do motor do CrossOver. Use num subshell: não pode misturar com as do Wine Staging.
+cx_env() {
+  local fw="$CX_DIR/frameworks"
+  unset DYLD_INSERT_LIBRARIES VK_ADD_IMPLICIT_LAYER_PATH WINEESYNC
+  export DYLD_FALLBACK_FRAMEWORK_PATH="$fw" DYLD_FALLBACK_LIBRARY_PATH="$fw:$fw/GStreamer.framework/Versions/1.0/lib"
+  export GST_PLUGIN_PATH="$fw/GStreamer.framework/Versions/1.0/lib/gstreamer-1.0"
+  # D3DMetal: só existe se veio de outro lugar (ex.: testes de DirectX 12 neste motor)
+  [ -d "$fw/renderer/d3dmetal/wine" ] && export WINEDLLPATH_PREPEND="$fw/renderer/d3dmetal/wine" \
+    CX_APPLEGPTK_LIBD3DSHARED_PATH="$fw/renderer/apple_gptk/external/libd3dshared.dylib"
+  export WINEPREFIX="$1" WINEDEBUG="$GAME_WINEDEBUG"
+}
+
+# Bottle-sombra do motor do CrossOver, com links para a pasta de usuário, a da Steam e a do Ubisoft do bottle
+cx_prefix() {
+  local shadow="$HOME_DIR/Bottles/.dx12-$(basename "$WINEPREFIX")" u="$USER" d
+  if [ ! -d "$shadow/drive_c/windows" ]; then
+    echo "Preparando o motor do CrossOver (só na primeira vez)..." >&2
+    ( cx_env "$shadow"; "$CX_WINE" wineboot -i >/dev/null 2>&1; "$CX_WINESERVER" -w )
+    [ -d "$shadow/drive_c/windows" ] || return 1
+  fi
+  if [ -n "$u" ] && [ -d "$WINEPREFIX/drive_c/users/$u" ] && [ ! -L "$shadow/drive_c/users/$u" ]; then
+    rm -rf "$shadow/drive_c/users/$u" && ln -s "$WINEPREFIX/drive_c/users/$u" "$shadow/drive_c/users/$u"
+  fi
+  for d in "Program Files (x86)/Steam" "Program Files (x86)/Ubisoft"; do
+    [ -d "$WINEPREFIX/drive_c/$d" ] && [ ! -e "$shadow/drive_c/$d" ] && ln -s "$WINEPREFIX/drive_c/$d" "$shadow/drive_c/$d"
+  done
+  echo "$shadow"
+}
+
+# O wineserver do bottle está aberto? (o lock do servidor fica preso enquanto ele roda)
+wineserver_up() {
+  local lock="/tmp/.wine-$(id -u)/server-$(printf '%x-%x' $(stat -f '%d %i' "$1"))/lock"
+  [ -f "$lock" ] && lsof -t "$lock" >/dev/null 2>&1
+}
+
+# Processo dono da janela "Ubisoft Connect" (vazio se ela ainda não existe)
+ubisoft_window_pid() {
+  osascript -l JavaScript -e '
+    ObjC.import("CoreGraphics"); ObjC.import("Foundation");
+    var l = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionAll, 0)), pid = "";
+    for (var i = 0; i < l.count && !pid; i++) {
+      var w = l.objectAtIndex(i);
+      if (ObjC.unwrap(w.objectForKey("kCGWindowName")) === "Ubisoft Connect") pid = String(ObjC.unwrap(w.objectForKey("kCGWindowOwnerPID")));
+    }
+    pid' 2>/dev/null
+}
+
+open_ubisoft() {
+  local shadow exe
+  [ -f "$WINEPREFIX/drive_c/$UBI_SUBDIR/upc.exe" ] || { echo "O Ubisoft Connect não está instalado neste bottle."; return 1; }
+  install_cx_engine || return 1
+  # Uma cópia aberta no Wine Staging (ex.: por um jogo) fica caindo em loop e usa a mesma pasta: fecha só ela
+  if wineserver_up "$WINEPREFIX"; then
+    for exe in upc.exe UplayWebCore.exe UplayService.exe UbisoftConnect.exe UplayCrashReporter.exe; do
+      "$WINE" taskkill /f /im "$exe" >/dev/null 2>&1
+    done
+  fi
+  shadow=$(cx_prefix) || { echo "Não consegui preparar o motor do CrossOver."; return 1; }
+  mkdir -p "$LOG_DIR"
+  (
+    cx_env "$shadow"
+    cd "$shadow/drive_c/$UBI_SUBDIR" || exit 1
+    # Já aberto: o upc.exe é de instância única e só mostra a janela que já existe
+    "$CX_WINE" "$UBI_EXE" -upc_desktop_mode $WEBHELPER_FLAGS >> "$LOG_DIR/ubisoft-connect.log" 2>&1 &
+    # O app "wine" do motor deixa a janela fora da tela até ser ativado: traz para a frente quando ela aparece
+    for _ in $(seq 1 90); do
+      pid=$(ubisoft_window_pid)
+      if [ -n "$pid" ]; then
+        sleep 2
+        osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $pid) to true"
+        break
+      fi
+      sleep 1
+    done
+  ) >/dev/null 2>&1 &
+  disown
+  echo "Abrindo o Ubisoft Connect..."
+}
+kill_cx() {
+  local shadow="$HOME_DIR/Bottles/.dx12-$(basename "$WINEPREFIX")"
+  [ -x "$CX_WINESERVER" ] && [ -d "$shadow" ] || return 0
+  ( cx_env "$shadow"; "$CX_WINESERVER" -k 2>/dev/null )
+}
+
 # ---------- Atualização automática (o app chama "winmac update <caminho do app>" ao abrir) ----------
 # Tudo vem da última versão publicada (tag), e não do main: assim nunca chega um arquivo pela metade
 # ou de cache antigo, e o app, o comando e as ferramentas sempre ficam da mesma versão.
@@ -934,7 +1060,10 @@ case "$1" in
     run_program "$2"
     echo "Abrindo $(basename "$2")..." ;;
   kill)
-    export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; kill_d3dmetal; echo "Bottle fechado." ;;
+    export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; kill_d3dmetal; kill_cx; echo "Bottle fechado." ;;
+  ubisoft)
+    setup_env "$2"
+    open_ubisoft ;;
   logs)
     mkdir -p "$LOG_DIR"; open "$LOG_DIR"; echo "Logs em $LOG_DIR" ;;
   fg)

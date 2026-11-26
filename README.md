@@ -49,6 +49,19 @@ Os jogos da lista abrem direto pelo `.exe`, como o `winmac run jogo.exe`: a Stea
 
 O WinMac não inclui o D3DMetal (a licença da Apple não permite redistribuir); ele usa o que já está instalado no Mac.
 
+## Ubisoft Connect
+
+O Ubisoft Connect não abre no Wine Staging de um Mac com chip Apple. Ele é de 32 bits, e às vezes, numa chamada ao sistema, o Rosetta não troca do modo 32 bits para o 64 bits (no `wow64cpu.dll` do Wine). Aí o código de 64 bits roda em modo 32 e o processo cai com `page fault on read access to 00002EC5`. O navegador interno dele (CEF) cai em loop, com `CEF render process crashed` no `launcher_log.txt`, e às vezes o próprio `upc.exe` fecha.
+
+Por isso o botão **Ubisoft Connect** (ou `winmac ubisoft`) abre ele em outro motor: o Wine 11 feito do código aberto do CrossOver 26.3 ([Highball](https://github.com/gauthierpiarrette/highball-engine)), com as bibliotecas do [Sikarugir](https://github.com/Sikarugir-App/Template). Esse motor não tem o problema.
+
+- Na primeira vez, o WinMac baixa o motor (uns 400 MB), confere o SHA-256 dos arquivos e guarda tudo em `~/winmac/engines/cx26.3-hb35`. As partes do D3DMetal que vêm junto são apagadas, porque não são usadas.
+- O Ubisoft Connect roda num bottle-sombra (`~/winmac/Bottles/.dx12-<bottle>`). Ele usa a mesma pasta do Ubisoft Connect, da Steam e do usuário (login e saves) do bottle da Steam.
+- O CEF desenha por software, com as mesmas opções do `steamwebhelper` da Steam. Pela GPU a janela fica vazia.
+- Antes de abrir, o WinMac fecha um Ubisoft Connect que esteja caindo no Wine Staging (ex.: aberto por um jogo), porque os dois usariam a mesma pasta.
+- Os erros vão para `~/winmac/logs/ubisoft-connect.log`. O **Fechar tudo** fecha o Ubisoft Connect também.
+- Jogos da Steam que precisam do Ubisoft Connect ainda abrem no Wine Staging. Eles chamam a cópia do Ubisoft Connect de lá, que cai, porque um jogo só fala com o Ubisoft Connect e com a Steam do mesmo motor.
+
 ## DirectX 11 direto em Metal com o DXMT
 
 Os jogos abertos no Wine Staging usam o [DXMT](https://github.com/3Shain/dxmt) (código aberto), que traduz DirectX 10/11 direto para Metal, sem passar pelo Vulkan. É mais rápido que o DXVK e funciona com jogos que dependem da Steam ou de outro launcher (ex.: *Need for Speed Heat* com o app da EA). O `winmac` baixa o DXMT sozinho e copia os arquivos para o bottle toda vez que abre a Steam.
@@ -99,6 +112,7 @@ O `app/build.sh` compila o WinMac Quadros junto com o app (precisa do SDK do mac
 | `winmac steam [bottle]` | Abre a Steam |
 | `winmac play <appid\|nome>` | Abre um jogo direto pelo `.exe`, sem a Steam (com o D3DMetal, se disponível) |
 | `winmac d3dmetal <appid> on\|off` | Liga ou desliga o D3DMetal num jogo |
+| `winmac ubisoft [bottle]` | Abre o Ubisoft Connect no motor do CrossOver (no Wine Staging ele cai) |
 | `winmac run <exe> [bottle]` | Roda qualquer `.exe` |
 | `winmac migrate [bottle]` | Move um bottle do CrossOver para `~/winmac/Bottles` e deixa um atalho no lugar antigo |
 | `winmac kill [bottle]` | Fecha tudo que está rodando no bottle |
