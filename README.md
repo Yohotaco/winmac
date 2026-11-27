@@ -45,7 +45,8 @@ Os jogos da lista abrem direto pelo `.exe`, como o `winmac run jogo.exe`: a Stea
 
 - Ao lado do `.exe` o WinMac cria um `steam_appid.txt`, para o jogo não fechar e se reabrir pela Steam.
 - Sem a Steam aberta, os jogos não contam conquistas nem tempo de jogo.
-- Jogos que exigem a Steam (DRM, multiplayer) ou outro launcher: clique em **Abrir Steam** antes, e o jogo se conecta a ela.
+- Jogos que exigem a Steam fecham sozinhos sem ela (ex.: o *Rayman Legends* chama `SteamAPI_Init()` e fecha em 2 segundos, sem erro). Se um jogo fechar em menos de 20 segundos com a Steam fechada, o WinMac abre ele pela Steam e lembra disso em `~/winmac/steam-only` (apague a linha do appid para voltar a abrir sem a Steam).
+- Jogos de outro launcher (app da EA, Ubisoft Connect, Rockstar) abrem sempre pela Steam, que passa a opção que o launcher exige (ex.: `-uplay_steam_mode`).
 
 O WinMac não inclui o D3DMetal (a licença da Apple não permite redistribuir); ele usa o que já está instalado no Mac.
 

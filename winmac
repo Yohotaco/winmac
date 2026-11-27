@@ -434,7 +434,7 @@ run_program() {
     *) cmd=("$WINE" "$1") ;;
   esac
   if [ "$2" = wait ]; then
-    "${cmd[@]}" >/dev/null 2>&1
+    WINEDEBUG="$dbg" "${cmd[@]}" > "$log" 2>&1
   else
     WINEDEBUG="$dbg" "${cmd[@]}" > "$log" 2>&1 &
     disown
@@ -567,6 +567,33 @@ no_steam_restart() {
   [ -f "$f" ] || printf '%s\n' "$2" > "$f"
 }
 
+# Jogos que só abrem com a Steam aberta. Ex.: o Rayman Legends chama SteamAPI_Init() ao abrir e, sem a Steam,
+# fecha sozinho em ~2 segundos, sem erro (o log para em "Using the Vulkan renderer"). Quando um jogo aberto
+# direto fecha em menos de 20 segundos com a Steam fechada, o WinMac abre ele pela Steam e lembra dele aqui.
+# Os jogos de outro launcher (EA app, Ubisoft Connect, Rockstar) vão sempre pela Steam: ela passa a opção
+# que o launcher exige (ex.: -uplay_steam_mode).
+STEAM_ONLY="$HOME_DIR/steam-only"
+needs_steam() { grep -qx "$1" "$STEAM_ONLY" 2>/dev/null; }
+uses_launcher() {
+  [ -d "$1/__Installer" ] || [ -f "$1/EAStore.ini" ] || [ -n "$(find "$1" -maxdepth 2 \( -iname 'uplay_r1_loader*.dll' \
+    -o -iname 'upc_r*_loader*.dll' -o -iname 'PlayGTAV.exe' -o -iname 'Link2EA*' \) 2>/dev/null | head -1)" ]
+}
+steam_running() { pgrep -f 'Steam\\steam\.exe' >/dev/null; }
+# Algum .exe da pasta do jogo ainda aberto (ex.: o .exe abriu o jogo de verdade e fechou, como na Unreal).
+# Pelo nome: o processo aberto por outro mostra só a linha de comando dele (ex.: "child.exe"), sem a pasta.
+game_running() {
+  local list names
+  list=$(ps -axo command=)
+  names=$(find "$1" -maxdepth 4 -iname '*.exe' -exec basename {} \; 2>/dev/null)
+  [ -n "$names" ] && printf '%s\n' "$list" | grep -qiF "$names"
+}
+play_steam() {
+  steam_ready "$BOTTLE" || first_boot
+  fix_webhelper
+  launch_steam -applaunch "$1"
+  echo "Abrindo jogo $1 pela Steam..."
+}
+
 # Abre o jogo da Steam no Wine Staging, direto pelo .exe (como o "winmac run"). Retorna 1 se não achou o .exe.
 play_direct() {
   local id="$1" dir exe
@@ -575,7 +602,18 @@ play_direct() {
   [ -f "$exe" ] || return 1
   no_steam_restart "$exe" "$id"
   mkdir -p "$LOG_DIR"
-  run_program "$exe" "" "$LOG_DIR/$id.log"
+  (
+    start=$(date +%s)
+    run_program "$exe" wait "$LOG_DIR/$id.log"
+    killed=$(stat -f %m "$WINEPREFIX/.winmac-killed" 2>/dev/null || echo 0)
+    # Fechou logo, sem a Steam, sem nada da pasta aberto e não foi no "Fechar tudo": precisa da Steam
+    if [ $(( $(date +%s) - start )) -lt 20 ] && [ -n "$dir" ] && [ "$killed" -lt "$start" ] &&
+       ! steam_running && ! game_running "$dir"; then
+      needs_steam "$id" || echo "$id" >> "$STEAM_ONLY"
+      play_steam "$id"
+    fi
+  ) >/dev/null 2>&1 &
+  disown
   echo "Abrindo $(basename "$exe")..."
 }
 
@@ -632,10 +670,8 @@ play_d3dmetal() {
   local id="$1" dir exe key shadow
   has_d3dmetal && ! d3dmetal_off "$id" && [ "$id" != "$WE_APPID" ] || return 1
   dir=$(steam_game_dir "$id") || return 1
-  # Jogos que dependem de outro launcher (EA app, Ubisoft Connect, Rockstar) precisam abrir no bottle
-  # da Steam, onde o launcher está instalado
-  [ -d "$dir/__Installer" ] || [ -f "$dir/EAStore.ini" ] || [ -n "$(find "$dir" -maxdepth 2 \( -iname 'uplay_r1_loader*.dll' \
-    -o -iname 'upc_r*_loader*.dll' -o -iname 'PlayGTAV.exe' -o -iname 'Link2EA*' \) 2>/dev/null | head -1)" ] && return 1
+  # Jogos que dependem de outro launcher (EA app, Ubisoft Connect, Rockstar) abrem pela Steam (ver needs_steam)
+  uses_launcher "$dir" && return 1
   exe=$(game_exe "$dir")
   [ -n "$exe" ] || return 1
   # O D3DMetal só roda jogos de 64 bits. Os de 32 bits (ex.: LEGO Marvel, LEGO O Hobbit) travavam na
@@ -1046,7 +1082,12 @@ case "$1" in
     fi
     [ -n "$id" ] || { echo "Jogo não encontrado. Use: winmac list"; exit 1; }
     BOTTLE="$3"
-    # Sem a Steam: o .exe do jogo abre direto (D3DMetal se der, senão Wine Staging, como o "winmac run")
+    # Pela Steam só os jogos que precisam dela (ver needs_steam)
+    dir=$(steam_game_dir "$id")
+    if [ "$id" != "$WE_APPID" ] && { needs_steam "$id" || { [ -n "$dir" ] && uses_launcher "$dir"; }; }; then
+      play_steam "$id"; exit 0
+    fi
+    # Os outros sem a Steam: o .exe do jogo abre direto (D3DMetal se der, senão Wine Staging, como o "winmac run")
     play_d3dmetal "$id" && exit 0
     play_direct "$id" || { echo "Não achei o .exe do jogo $id. Ele terminou de baixar?"; exit 1; } ;;
   d3dmetal)
@@ -1060,7 +1101,9 @@ case "$1" in
     run_program "$2"
     echo "Abrindo $(basename "$2")..." ;;
   kill)
-    export WINEPREFIX="$(bottle_path "$2")"; "$WINESERVER" -k; kill_d3dmetal; kill_cx; echo "Bottle fechado." ;;
+    # A marca impede que um jogo fechado aqui pareça "fechou logo, precisa da Steam" (ver play_direct)
+    export WINEPREFIX="$(bottle_path "$2")"; touch "$WINEPREFIX/.winmac-killed" 2>/dev/null
+    "$WINESERVER" -k; kill_d3dmetal; kill_cx; echo "Bottle fechado." ;;
   ubisoft)
     setup_env "$2"
     open_ubisoft ;;
